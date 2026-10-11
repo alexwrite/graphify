@@ -128,10 +128,11 @@ def _sdc_index(root: Path) -> dict[str, Path]:
 
 
 def _twig_loader_root(path: Path) -> "Path | None":
-    """The `templates/` dir bare names resolve against: Twig names are never relative to the referrer."""
-    for parent in list(path.parents)[:_MAX_WALK_UP]:
-        if parent.name == "templates":
-            return parent
+    """The `templates/` dir bare names resolve against (a template's own tree, else the nearest `templates/` child)."""
+    if path.suffix.lower() == ".twig":
+        for parent in list(path.parents)[:_MAX_WALK_UP]:
+            if parent.name == "templates":
+                return parent
     current = path.parent
     for _ in range(_MAX_WALK_UP):
         templates = current / "templates"

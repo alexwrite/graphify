@@ -304,3 +304,14 @@ def test_unresolved_reference_is_left_dangling(tmp_path):
 
 def test_unreadable_file_reports_an_error(tmp_path):
     assert "error" in extract_twig(tmp_path / "missing.twig")
+
+
+def test_php_referrer_under_a_dir_named_templates_finds_the_app_loader_root(tmp_path):
+    from graphify.extractors.twig import _resolve_path_ref
+
+    app = tmp_path / "templates" / "app"
+    _write(app, "templates/a.html.twig", "<p></p>\n")
+    controller = _write(app, "src/Controller/A.php", "<?php\n")
+
+    # Only a template's own tree is a loader root; a PHP file walks up to `templates/`.
+    assert _resolve_path_ref("a.html.twig", controller) == app / "templates/a.html.twig"

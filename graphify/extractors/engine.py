@@ -13,6 +13,7 @@ from graphify.extractors.base import (
 )
 from graphify.ids import normalize_id
 from graphify.extractors.models import LanguageConfig
+from graphify.extractors.php_views import render_call_template, render_edge, template_attribute_templates
 from graphify.extractors.resolution import _resolve_js_import_target
 from graphify.security import sanitize_metadata
 from pathlib import Path
@@ -5408,6 +5409,14 @@ def _extract_generic(
             edge["metadata"] = sanitize_metadata(metadata)
         edges.append(edge)
 
+    seen_render_pairs: set[tuple[str, str]] = set()
+
+    def add_render_edge(ref: tuple[str, str], src: str, line: int) -> None:
+        edge = render_edge(ref, src, path, line)
+        if edge is not None and (src, edge["target"]) not in seen_render_pairs:
+            seen_render_pairs.add((src, edge["target"]))
+            edges.append(edge)
+
     def ensure_named_node(name: str, line: int) -> str:
         nid = _make_id(stem, ".".join(namespace_stack), name)
         if nid in seen_ids:
@@ -7120,6 +7129,8 @@ def _extract_generic(
                         annotation_targets.add(target_nid)
 
             if config.ts_module == "tree_sitter_php":
+                for engine_name, template, attr_line in template_attribute_templates(node, source):
+                    add_render_edge((engine_name, template), func_nid, attr_line)
                 params_container = None
                 for c in node.children:
                     if c.type == "formal_parameters":
@@ -9135,6 +9146,11 @@ def _extract_generic(
                         if arg.type == "identifier":
                             _emit_indirect_ref(arg, caller_nid, enclosing_locals, "argument")
 
+            if config.ts_module == "tree_sitter_php":
+                rendered = render_call_template(node, source)
+                if rendered is not None:
+                    add_render_edge(rendered, caller_nid, node.start_point[0] + 1)
+
             # Helper function calls: config('foo.bar') → uses_config edge to "foo"
             if (callee_name and callee_name in config.helper_fn_names):
                 args_node = node.child_by_field_name("arguments")
@@ -9498,7 +9514,7 @@ def _extract_generic(
     _seen_edge_payloads: set[str] = set()
     for edge in edges:
         src, tgt = edge["source"], edge["target"]
-        if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from", "re_exports")):
+        if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from", "re_exports", "renders")):
             payload = json.dumps(edge, sort_keys=True, default=str)
             if payload in _seen_edge_payloads:
                 continue

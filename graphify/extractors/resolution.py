@@ -1005,7 +1005,7 @@ def _node_disambiguation_source_key(node: dict, root: Path) -> str:
 # back to the importer's own source_key would then look up an id that
 # disambiguation has already retired, and the edge would dangle.
 _TEMPLATE_TARGET_RELATIONS = frozenset({
-    "includes", "embeds", "extends", "imports_macro", "uses_template",
+    "includes", "embeds", "extends", "imports_macro", "uses_template", "renders",
 })
 
 _FILE_TARGET_RELATIONS = frozenset({
