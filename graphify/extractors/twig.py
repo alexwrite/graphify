@@ -10,9 +10,10 @@ Two dialects are resolved to real files rather than left as stubs:
   The provider (``mytheme``) is a Drupal extension machine name, so its root is
   the nearest ancestor holding ``mytheme.info.yml``, and the component template
   lives at ``<root>/components/**/card/card.twig``.
-* **Path references** -- ``{% extends 'layout.html.twig' %}`` and Symfony's
-  ``@Namespace/path.html.twig``, resolved against the referring file's own
-  directory and any enclosing ``templates/`` root.
+* **Path references** -- ``{% extends 'layout.html.twig' %}``, resolved against
+  the loader root (the enclosing ``templates/`` directory), and Drupal's
+  ``@extension/path.html.twig``. A Symfony ``@Namespace/`` names a bundle or a
+  configured path, so it is left unresolved rather than guessed.
 
 A reference that resolves becomes an edge to that file's node, so templates link
 to templates. A reference that does not resolve still emits an edge, to a stub
@@ -126,33 +127,52 @@ def _sdc_index(root: Path) -> dict[str, Path]:
     return index
 
 
-def _resolve_path_ref(raw: str, path: Path) -> "Path | None":
-    """Resolve a non-SDC reference against the referring file's own tree."""
-    # Symfony's `@Namespace/rest`: the namespace maps to a directory configured
-    # outside the template, so only the remainder is usable statically.
-    relative = raw.split("/", 1)[1] if raw.startswith("@") and "/" in raw else raw
-    if not relative or relative.startswith("/") or ".." in Path(relative).parts:
-        return None
-    candidates = [path.parent / relative]
+def _twig_loader_root(path: Path) -> "Path | None":
+    """The `templates/` dir bare names resolve against: Twig names are never relative to the referrer."""
+    for parent in list(path.parents)[:_MAX_WALK_UP]:
+        if parent.name == "templates":
+            return parent
     current = path.parent
     for _ in range(_MAX_WALK_UP):
         templates = current / "templates"
         try:
             if templates.is_dir():
-                candidates.append(templates / relative)
+                return templates
         except OSError:
-            break
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    for candidate in candidates:
-        try:
-            if candidate.is_file():
-                return candidate
-        except OSError:
-            continue
+            return None
+        if current.parent == current:
+            return None
+        current = current.parent
     return None
+
+
+def _is_safe_relative(name: str) -> bool:
+    return bool(name) and not name.startswith("/") and ".." not in Path(name).parts
+
+
+def _existing_file(candidate: Path) -> "Path | None":
+    try:
+        return candidate if candidate.is_file() else None
+    except OSError:
+        return None
+
+
+def _resolve_path_ref(raw: str, path: Path) -> "Path | None":
+    """Resolve a non-SDC reference against the loader root, or None."""
+    if raw.startswith("@"):
+        # Drupal core maps `@ext/x` to `<ext>/templates/x` then `<ext>/x`; a Symfony namespace stays unresolved.
+        namespace, _, relative = raw[1:].partition("/")
+        if not namespace or not _is_safe_relative(relative):
+            return None
+        root = _provider_root(path.parent, namespace)
+        if root is None:
+            return None
+        return (_existing_file(root / "templates" / relative)
+                or _existing_file(root / relative))
+    if not _is_safe_relative(raw):
+        return None
+    loader_root = _twig_loader_root(path)
+    return _existing_file(loader_root / raw) if loader_root is not None else None
 
 
 def _resolve_twig_ref(raw: str, path: Path) -> "Path | None":

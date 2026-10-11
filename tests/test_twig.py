@@ -114,7 +114,36 @@ def test_path_reference_resolves_against_the_templates_root(tmp_path):
     }
 
 
-def test_namespaced_path_reference_drops_the_namespace(tmp_path):
+def test_bare_name_ignores_a_same_named_file_beside_the_referrer(tmp_path):
+    root = tmp_path / "app"
+    _write(root, "templates/base.html.twig", "<html></html>\n")
+    _write(root, "templates/admin/base.html.twig", "<div></div>\n")
+    page = _write(root, "templates/admin/page.html.twig",
+                  "{% extends 'base.html.twig' %}\n")
+
+    r = extract_twig(page)
+
+    # Twig names are relative to the loader root, never to the current file.
+    assert _target_files(r, "extends") == {
+        str((root / "templates/base.html.twig").resolve())
+    }
+
+
+def test_nested_templates_dir_is_not_taken_for_the_loader_root(tmp_path):
+    root = tmp_path / "app"
+    _write(root, "templates/layout.html.twig", "<html></html>\n")
+    _write(root, "templates/docs/templates/layout.html.twig", "<p></p>\n")
+    page = _write(root, "templates/docs/page.html.twig",
+                  "{% extends 'layout.html.twig' %}\n")
+
+    r = extract_twig(page)
+
+    assert _target_files(r, "extends") == {
+        str((root / "templates/layout.html.twig").resolve())
+    }
+
+
+def test_bundle_namespace_is_not_resolved_against_the_app_templates(tmp_path):
     root = tmp_path / "app"
     _write(root, "templates/parts/nav.html.twig", "<nav></nav>\n")
     page = _write(root, "templates/home.html.twig",
@@ -122,9 +151,35 @@ def test_namespaced_path_reference_drops_the_namespace(tmp_path):
 
     r = extract_twig(page)
 
-    # The namespace maps to a directory configured outside the template, so only
-    # the remainder is resolvable — here it matches under templates/.
-    assert _rel_targets(r, "includes") == {"nav.html.twig"}
+    # A Symfony namespace maps to a bundle or a configured path the template
+    # cannot see, so the reference stays a stub instead of a guessed file.
+    assert _target_files(r, "includes") == set()
+    assert _rel_targets(r, "includes") == {"@Shared/parts/nav.html.twig"}
+
+
+def test_drupal_namespace_resolves_under_the_extension_templates_dir(tmp_path):
+    root = _theme(tmp_path)
+    _write(root, "templates/parts/nav.html.twig", "<nav></nav>\n")
+    page = _write(root, "templates/page.html.twig",
+                  "{% include '@mytheme/parts/nav.html.twig' %}\n")
+
+    r = extract_twig(page)
+
+    assert _target_files(r, "includes") == {
+        str((root / "templates/parts/nav.html.twig").resolve())
+    }
+
+
+def test_foreign_drupal_namespace_does_not_link_to_the_local_override(tmp_path):
+    sub = tmp_path / "subtheme"
+    _write(sub, "subtheme.info.yml", "name: Sub\ntype: theme\n")
+    page = _write(sub, "templates/node.html.twig",
+                  "{% extends '@basetheme/node.html.twig' %}\n")
+
+    r = extract_twig(page)
+
+    # The base theme is not under this file's tree: no self-loop to the override.
+    assert _target_files(r, "extends") == set()
 
 
 def test_include_function_form_is_extracted(tmp_path):
