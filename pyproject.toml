@@ -37,7 +37,8 @@ dependencies = [
     "tree-sitter-c-sharp>=0.23,<0.25",
     "tree-sitter-kotlin>=1.0,<2.0",
     "tree-sitter-scala>=0.23,<0.27",
-    "tree-sitter-php>=0.23,<0.25",
+    # Fork commit until tree-sitter/tree-sitter-php#307 ships: keyword-named class constants (#17).
+    "tree-sitter-php @ git+https://github.com/alexwrite/tree-sitter-php@9678351433dfbcbd43bddfc614927f3dd7e33501",
     "tree-sitter-swift>=0.7,<0.9",
     "tree-sitter-lua>=0.2,<0.6",
     "tree-sitter-zig>=1.0,<2.0",
