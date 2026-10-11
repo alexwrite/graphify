@@ -76,6 +76,14 @@ def _isolate_backend_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_symlink_roots_env(monkeypatch):
+    """An exported GRAPHIFY_FOLLOW_SYMLINKS_INTO would widen every detect() corpus."""
+    from graphify.detect import FOLLOW_SYMLINKS_INTO_ENV
+
+    monkeypatch.delenv(FOLLOW_SYMLINKS_INTO_ENV, raising=False)
+
+
 _ANALYZE_WARNING_FILTERS = (
     "ignore:Tensorflow not installed; ParametricUMAP will be unavailable:ImportWarning:umap",
     "ignore:Please import `random` from the `scipy\\.sparse` namespace.*:"

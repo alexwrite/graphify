@@ -1833,8 +1833,59 @@ def _resolves_under_root(path: Path, root: Path) -> bool:
     return True
 
 
-def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace: bool | None = None, extra_excludes: list[str] | None = None, cache_root: Path | None = None, gitignore: bool = True) -> dict:
+FOLLOW_SYMLINKS_INTO_ENV = "GRAPHIFY_FOLLOW_SYMLINKS_INTO"
+
+
+def trusted_symlink_roots(roots: Iterable[str | Path] | None = None) -> list[Path]:
+    """Return the validated directories out-of-root symlink targets may resolve into.
+
+    ``None`` reads ``GRAPHIFY_FOLLOW_SYMLINKS_INTO`` (``os.pathsep``-separated
+    absolute paths). Relative env entries, missing directories and a filesystem
+    root are dropped with a warning: an allowlist that silently widened to
+    "anywhere" would defeat the containment rule it relaxes.
+    """
+    from_env = roots is None
+    if roots is None:
+        raw = os.environ.get(FOLLOW_SYMLINKS_INTO_ENV, "")
+        roots = [e for e in raw.split(os.pathsep) if e.strip()]
+    trusted: list[Path] = []
+    for entry in roots:
+        candidate = Path(entry)
+        if from_env and not candidate.is_absolute():
+            reason = f"{FOLLOW_SYMLINKS_INTO_ENV} entries must be absolute paths"
+        else:
+            try:
+                candidate = candidate.resolve()
+            except (OSError, RuntimeError):
+                candidate = candidate.absolute()
+            if candidate == Path(candidate.anchor):
+                reason = "a filesystem root would admit every symlink target"
+            elif not candidate.is_dir():
+                reason = "not an existing directory"
+            else:
+                if candidate not in trusted:
+                    trusted.append(candidate)
+                continue
+        print(
+            f"[graphify] WARNING: ignoring symlink root {entry}: {reason}",
+            file=sys.stderr,
+        )
+    return sorted(trusted)
+
+
+def _under_trusted_root(path: Path, trusted: list[Path]) -> Path | None:
+    """Return ``path``'s resolved target when it lies under a trusted root."""
+    try:
+        real = path.resolve()
+    except (OSError, RuntimeError):
+        return None
+    return real if any(real.is_relative_to(t) for t in trusted) else None
+
+
+def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace: bool | None = None, extra_excludes: list[str] | None = None, cache_root: Path | None = None, gitignore: bool = True, follow_symlinks_into: Iterable[str | Path] | None = None) -> dict:
     root = root.resolve()
+    trusted_roots = trusted_symlink_roots(follow_symlinks_into)
+    walk_links = bool(follow_symlinks) or bool(trusted_roots)
     configured_out_dir = root / GRAPHIFY_OUT
     configured_out_names = {configured_out_dir.name}
     try:
@@ -1903,7 +1954,27 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                 ignore_patterns.append((root, line))
                 explicit_ignore_patterns.append((root, line))
 
+    # Admitted out-of-root links: the host's .gitignore does not govern a tree it links in on purpose.
+    external_links: dict[Path, dict[Path, bool]] = {}
+    external_seen: set[Path] = set()
+
+    def _owning_external_link(path: Path) -> Path | None:
+        if not external_links:
+            return None
+        for candidate in (path, *path.parents):
+            if candidate in external_links:
+                return candidate
+            if candidate == root:
+                return None
+        return None
+
     def _ignored_for_scan(path: Path) -> bool:
+        link = _owning_external_link(path)
+        if link is not None:
+            if _is_ignored(path, root, explicit_ignore_patterns, _cache=explicit_ignore_cache):
+                return True
+            own = [(a, pat) for a, pat in ignore_patterns if a == link or a.is_relative_to(link)]
+            return _is_ignored(path, root, own, _cache=external_links[link])
         return _is_scan_ignored(
             path,
             root,
@@ -1945,10 +2016,10 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
     for scan_root in scan_paths:
         in_memory_tree = memory_dir.exists() and str(scan_root).startswith(str(memory_dir))
         for dirpath, dirnames, filenames in os.walk(
-            scan_root, followlinks=follow_symlinks, onerror=_on_walk_error
+            scan_root, followlinks=walk_links, onerror=_on_walk_error
         ):
             dp = Path(dirpath)
-            if follow_symlinks and os.path.islink(dirpath):
+            if walk_links and os.path.islink(dirpath):
                 real = os.path.realpath(dirpath)
                 parent_real = os.path.realpath(os.path.dirname(dirpath))
                 if parent_real == real or parent_real.startswith(real + os.sep):
@@ -1979,8 +2050,16 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                 # bin/, obj/, wwwroot/, generated/, … : a pathological slowdown on large
                 # repos for no correctness gain.
                 kept_dirs: list[str] = []
-                for d in dirnames:
+                for d in sorted(dirnames) if trusted_roots else dirnames:
                     child = dp / d
+                    external_target = None
+                    if trusted_roots and child.is_symlink() and not _resolves_under_root(child, root):
+                        external_target = _under_trusted_root(child, trusted_roots)
+                        if external_target is not None:
+                            if external_target in external_seen:
+                                skipped_sensitive.append(str(child) + " [duplicate symlink target]")
+                                continue
+                            external_links[child] = {}
                     is_configured_out = False
                     if d in configured_out_names:
                         try:
@@ -2002,15 +2081,20 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                     if _ignored_for_scan(child):
                         ignored.append(str(child) + os.sep)
                         continue
+                    if external_target is not None:
+                        external_seen.add(external_target)
                     kept_dirs.append(d)
                 dirnames[:] = kept_dirs
-                if follow_symlinks:
+                if walk_links:
                     safe_dirs: list[str] = []
                     for d in dirnames:
                         child = dp / d
-                        if child.is_symlink() and not _resolves_under_root(child, root):
-                            skipped_sensitive.append(str(child) + " [symlink target outside scan root]")
-                            continue
+                        if child.is_symlink() and child not in external_links:
+                            if not _resolves_under_root(child, root):
+                                skipped_sensitive.append(str(child) + " [symlink target outside scan root]")
+                                continue
+                            if not follow_symlinks:
+                                continue
                         safe_dirs.append(d)
                     dirnames[:] = safe_dirs
             for fname in filenames:
@@ -2027,6 +2111,7 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
 
     out_base = Path(cache_root).resolve() if cache_root is not None else root
     converted_dir = out_base / GRAPHIFY_OUT / "converted"
+    external_files_seen: set[Path] = set()
 
     for p in all_files:
         # For memory dir files, skip hidden/noise filtering
@@ -2039,8 +2124,14 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
             ignored.append(str(p))
             continue
         if not _resolves_under_root(p, root):
-            skipped_sensitive.append(str(p) + " [symlink target outside scan root]")
-            continue
+            external_real = _under_trusted_root(p, trusted_roots) if trusted_roots else None
+            if external_real is None:
+                skipped_sensitive.append(str(p) + " [symlink target outside scan root]")
+                continue
+            if external_real in external_files_seen:
+                skipped_sensitive.append(str(p) + " [duplicate symlink target]")
+                continue
+            external_files_seen.add(external_real)
         if not _is_regular_file(p):
             # A repository may contain named pipes, sockets and device nodes,
             # and `clone <github-url>` exists precisely to point the scan at
@@ -2747,6 +2838,7 @@ def detect_incremental(
     extra_excludes: list[str] | None = None,
     gitignore: bool = True,
     cache_root: Path | None = None,
+    follow_symlinks_into: Iterable[str | Path] | None = None,
 ) -> dict:
     """Like detect(), but returns only new or modified files since the last run.
 
@@ -2768,7 +2860,8 @@ def detect_incremental(
     The ``follow_symlinks`` flag is forwarded to :func:`detect` so in-root
     symlinked sub-trees are scanned consistently between full and incremental
     runs. ``None`` (default) does not follow symlinked directories; callers must
-    opt in explicitly, and resolved targets outside the scan root are skipped.
+    opt in explicitly, and resolved targets outside the scan root are skipped
+    unless they lie under a ``follow_symlinks_into`` root (also forwarded).
 
     ``cache_root`` is forwarded to :func:`detect`'s own word-count cache the
     same way the fresh-scan (non-incremental) call site already does. Without
@@ -2784,6 +2877,7 @@ def detect_incremental(
         extra_excludes=extra_excludes,
         gitignore=gitignore,
         cache_root=cache_root,
+        follow_symlinks_into=follow_symlinks_into,
     )
     # Pass ``root`` so a manifest written with relative keys (post-#777) is
     # re-anchored to the absolute form the rest of this function compares

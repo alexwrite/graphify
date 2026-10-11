@@ -371,6 +371,24 @@ See the [full command reference](#full-command-reference) below.
 
 graphify honors `.gitignore` and supports `--exclude` patterns and a project `.graphifyignore`. Details: **[Configuration](https://docs.graphify.com/reference/configuration)**.
 
+### Symlinked directories outside the project
+
+A symlink whose target resolves outside the scanned folder is skipped by default (reported in `skipped_sensitive` as `[symlink target outside scan root]`). A project that loads plugins through symlinks, such as `addons/<name> -> ../../Addons/<repo>/addons/<name>`, can opt in with an allowlist:
+
+```bash
+graphify extract . --code-only --follow-symlinks-into ../Addons   # repeatable
+GRAPHIFY_FOLLOW_SYMLINKS_INTO=/abs/dir1:/abs/dir2 graphify extract . --code-only
+```
+
+- Only targets that resolve under a listed directory are indexed; anything else stays skipped. A filesystem root, a missing directory or a relative env entry is refused.
+- Nodes keep the path through the link (`addons/<name>/src/...`), never the resolved path, so ids and `source_file` do not depend on the machine.
+- Two links to the same target are indexed once (`[duplicate symlink target]`), and link cycles terminate.
+- `.graphifyignore` and `--exclude` still apply inside linked trees, and so does each linked tree's own `.gitignore`. The host's `.gitignore` does not: listing the directory is the explicit intent to graph what the host keeps out of git.
+- The value is saved in `graphify-out/.graphify_build.json`, so `graphify update`, the git hooks and `watch` keep the same corpus. Precedence: flag, then the saved value, then the env var.
+- The LLM file and image readers still skip out-of-root targets, so documents in linked trees are listed but never sent to a model. Use `--code-only` for linked code.
+
+Alternative: one graph per repository combined with `graphify merge-graphs`. It keeps each repository's nodes, but calls between the host and a plugin are not resolved the same way (on a minimal PHP host + plugin pair: 0 cross-repository `calls` edges, against 4 with `--follow-symlinks-into`).
+
 ---
 
 ## Team setup
