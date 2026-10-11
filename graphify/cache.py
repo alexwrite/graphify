@@ -37,7 +37,7 @@ except Exception:
     _EXTRACTOR_VERSION = "unknown"
 
 # Bump when AST cache-key semantics change independently of the package version.
-_AST_CACHE_SCHEMA = 10  # PHP static calls as `(static)` member raw calls (#23).
+_AST_CACHE_SCHEMA = 11  # PHP bare function calls never bind a same-file method (#14).
 
 
 # Per-process memo: distributions() scans site-packages metadata, which is

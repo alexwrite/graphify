@@ -9028,6 +9028,13 @@ def _extract_generic(
                         and not nid_to_sf.get(tgt_nid)
                     ):
                         tgt_nid = None
+                    # A bare PHP `name(...)` invokes a FUNCTION, never a method
+                    # or a class: the in-file bind obeys the cross-file rule
+                    # (#14, #52), and the raw call goes on to that pass.
+                    if php_function_call and tgt_nid and (
+                        tgt_nid in method_owner or tgt_nid in callable_class_nids
+                    ):
+                        tgt_nid = None
                 # A name-only reference can leave a source-less stub behind when
                 # the target is outside the scanned corpus (for example,
                 # ``HTTPException`` imported from FastAPI). It is useful for the
