@@ -10,9 +10,13 @@ Heuristic boundaries, all fail-closed:
     ``method`` edge whose source is a class.
   * Layers come from folder names only (Symfony by type or by domain, Laravel).
     A class whose folder names no layer goes to ``other``, never guessed.
-  * The domain is the first folder under the code root; inside a layer folder
-    (``src/Controller/Account/``) it is the folder below the layer. A class
-    placed directly in a layer folder has no known domain.
+  * Type folders are the names framework generators give to a kind of class
+    (``Controller``, ``Entity``, ``Command``, ``Form``, ``Enum``...). A code root
+    where most classes sit below a type folder is organised by type: the domain
+    is the first non-type folder below (``src/Service/Billing/`` gives Billing).
+    Otherwise it is organised by domain: the domain is the first folder under
+    the root, unless that folder is a type folder. A class with no domain folder
+    goes to the explicit "Common" group, never to a guessed domain.
   * A template belongs to a domain only through a ``renders`` edge from one of
     that domain's classes.
   * Only EXTRACTED calls can mark a dependency as going against the layer or
@@ -51,6 +55,25 @@ _LAYER_DIRS = {
     "entity": "entity", "entities": "entity", "model": "entity", "models": "entity",
     "view": "view", "views": "view",
 }
+# Folder names framework generators give to a kind of class (Symfony maker, Laravel make:*), never to a business domain.
+_TYPE_DIRS = set(_LAYER_DIRS) | {
+    "abstract", "abstracts", "attribute", "attributes", "authenticator", "authenticators",
+    "cast", "casts", "channel", "channels", "concerns", "function", "functions", "handler", "handlers",
+    "purger", "purgers",
+    "command", "commands", "component", "components", "console", "contract", "contracts",
+    "datafixtures", "datatransformer", "datatransformers", "doctrine", "dto", "dtos", "enum", "enums",
+    "event", "events", "eventlistener", "eventlisteners", "eventsubscriber", "eventsubscribers",
+    "exception", "exceptions", "extension", "extensions", "factory", "factories", "fixtures",
+    "form", "forms", "helper", "helpers", "http", "interface", "interfaces", "job", "jobs",
+    "listener", "listeners", "mail", "message", "messages", "messagehandler", "messagehandlers",
+    "middleware", "migration", "migrations", "normalizer", "normalizers", "notification", "notifications",
+    "observer", "observers", "policies", "policy", "provider", "providers", "request", "requests",
+    "resource", "resources", "rule", "rules", "scope", "scopes", "security", "serializer",
+    "subscriber", "subscribers", "support", "trait", "traits", "twig", "type", "types",
+    "util", "utils", "validator", "validators", "voter", "voters",
+}
+LAYOUT_BY_TYPE = "by-type"
+LAYOUT_BY_DOMAIN = "by-domain"
 _TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
 _TEST_FILE = re.compile(r"(Test|Tests|_test|\.test|\.spec)\.[A-Za-z]+$|^test_[^/]*\.py$")
 _VENDOR_DIRS = {"vendor", "vendors", "node_modules", "bower_components", "third_party", "third-party"}
@@ -90,19 +113,24 @@ def classify_layer(source_file: str, root: Optional[str]) -> str:
     return "other"
 
 
-def classify_domain(source_file: str, root: Optional[str]) -> Optional[str]:
-    """Domain folder of a class under *root*, or None when no folder names one."""
+def detect_layout(class_files: list[str], root: Optional[str]) -> str:
+    """``by-type`` when most classes under *root* sit below a type folder, else ``by-domain``."""
+    nested = [_parts(f) for f in class_files
+              if f and not is_test_path(f) and not is_vendor_path(f)]
+    nested = [p for p in nested if root and len(p) >= 3 and p[0] == root]
+    typed = sum(1 for p in nested if p[1].lower() in _TYPE_DIRS)
+    return LAYOUT_BY_TYPE if nested and typed * 2 >= len(nested) else LAYOUT_BY_DOMAIN
+
+
+def classify_domain(source_file: str, root: Optional[str], layout: str = LAYOUT_BY_DOMAIN) -> Optional[str]:
+    """Business domain folder of a class, or None when only type folders hold it."""
     parts = _parts(source_file)
     if not root or len(parts) < 3 or parts[0] != root:
         return None
-    rest = parts[1:-1]
-    first = rest[0]
-    if first.lower() == "http" and len(rest) > 1 and rest[1].lower() in ("controllers", "controller"):
-        rest = rest[1:]
-        first = rest[0]
-    if first.lower() in _LAYER_DIRS:
-        return rest[1] if len(rest) > 1 else None
-    return first
+    dirs = parts[1:-1]
+    if layout == LAYOUT_BY_TYPE:
+        return next((d for d in dirs if d.lower() not in _TYPE_DIRS), None)
+    return None if dirs[0].lower() in _TYPE_DIRS else dirs[0]
 
 
 def _line(location: Any) -> int:
@@ -110,7 +138,7 @@ def _line(location: Any) -> int:
     return int(m.group(1)) if m else 0
 
 
-def _group_of(source_file: str, external: bool, root: Optional[str]) -> tuple[str, str]:
+def _group_of(source_file: str, external: bool, root: Optional[str], layout: str) -> tuple[str, str]:
     """(kind, name) of the level-1 box a class belongs to."""
     if external or not source_file or is_vendor_path(source_file):
         return KIND_VENDOR, "Framework / vendor"
@@ -119,9 +147,9 @@ def _group_of(source_file: str, external: bool, root: Optional[str]) -> tuple[st
     parts = _parts(source_file)
     if not root or not parts or parts[0] != root:
         return KIND_OUTSIDE, f"{parts[0]}/" if len(parts) > 1 else "(repository root)"
-    domain = classify_domain(source_file, root)
+    domain = classify_domain(source_file, root, layout)
     if domain is None:
-        return KIND_NONE, "(no domain)"
+        return KIND_NONE, "Common"
     return KIND_DOMAIN, domain
 
 
@@ -188,7 +216,9 @@ def build_zoom_data(graph: dict, project: str = "") -> dict:
 
     class_ids = sorted(i for i, n in nodes.items() if n.get("_callable_class"))
     class_idx = {cid: k for k, cid in enumerate(class_ids)}
-    root = detect_code_root([str(nodes[c].get("source_file") or "") for c in class_ids])
+    class_files = [str(nodes[c].get("source_file") or "") for c in class_ids]
+    root = detect_code_root(class_files)
+    layout = detect_layout(class_files, root)
 
     files: list[str] = []
     file_idx: dict[str, int] = {}
@@ -205,7 +235,7 @@ def build_zoom_data(graph: dict, project: str = "") -> dict:
     for cid in class_ids:
         n = nodes[cid]
         src = str(n.get("source_file") or "")
-        key = _group_of(src, bool(n.get("external")), root)
+        key = _group_of(src, bool(n.get("external")), root, layout)
         if key not in group_idx:
             group_idx[key] = len(groups)
             groups.append(key)
@@ -294,6 +324,7 @@ def build_zoom_data(graph: dict, project: str = "") -> dict:
     return {
         "project": project,
         "root": root,
+        "layout": layout,
         "layers": [label for _, label in LAYERS],
         "layerRank": [LAYER_RANK.get(key, -1) for key, _ in LAYERS],
         "files": files,
@@ -425,7 +456,7 @@ a.cls:hover { border-color: var(--ink); }
 .cls.is-active { border: 3px solid var(--focus); }
 .tpl { color: var(--ink2); font-style: italic; }
 .icon-against { flex: none; width: 16px; height: 16px; }
-.icon-against path { fill: var(--danger); } .icon-against text { fill: var(--on-danger); font: 700 11px system-ui, sans-serif; }
+.icon-against path { fill: var(--danger); } .icon-against text { fill: var(--on-danger); font: 700 12px system-ui, sans-serif; }
 .more { font: inherit; font-size: .88rem; min-height: 36px; padding: 4px 10px; background: transparent; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
 .more:hover { border-color: var(--ink); }
 .flows { display: block; margin: 0 0 4px; }
@@ -605,6 +636,7 @@ var SWATCH = {
   classAgainst: function (s) { s.appendChild(sv("rect", { x: 2, y: 3, width: 40, height: 18, rx: 2, style: "fill:var(--box);stroke:var(--danger);stroke-width:2" })); s.appendChild(sv("path", { d: "M10 6 16 17H4Z", style: "fill:var(--danger)" })); },
   columns: function (s) { [2, 16, 30].forEach(function (x) { s.appendChild(sv("rect", { x: x, y: 3, width: 12, height: 18, rx: 1, style: "fill:var(--panel);stroke:var(--border)" })); }); },
   badge: function (s) { s.appendChild(sv("rect", { x: 6, y: 2, width: 32, height: 20, rx: 10, style: "fill:var(--danger)" })); s.appendChild(sv("text", { x: 22, y: 16, "text-anchor": "middle", style: "fill:var(--on-danger);font-weight:700;font-size:12px" }, "! 2")); },
+  common: function (s) { s.appendChild(sv("rect", { x: 2, y: 4, width: 40, height: 16, rx: 2, style: "fill:var(--box);stroke:var(--border)" })); s.appendChild(sv("text", { x: 22, y: 16, "text-anchor": "middle", style: "font-size:12px;font-weight:650" }, "C")); },
   fold: function (s) { s.appendChild(sv("rect", { x: 2, y: 4, width: 40, height: 16, rx: 2, style: "fill:var(--box);stroke:var(--border);stroke-dasharray:4 3" })); }
 };
 
@@ -649,7 +681,9 @@ function level1(view) {
   var against = m.links.filter(function (l) { return l.against; }).length;
   view.appendChild(el("h2", { tabindex: "-1" }, "Domains"));
   var hiddenLinks = m.links.filter(function (l) { return !l.shownByDefault && !l.against; }).length;
-  view.appendChild(el("p", { "class": "lede" }, plural(m.nodes.length, "domain") + " shown, callers above the code they call" +
+  var common = m.nodes.some(function (n) { return n.kind === "none"; });
+  view.appendChild(el("p", { "class": "lede" }, (D.layout === "by-type" ? "Code organised by type (Controller/, Service/...): each domain is the first business folder below them. " : "") +
+    plural(m.nodes.length, "domain") + " shown, callers above the code they call" +
     (hiddenLinks ? ", with the " + TOP_LINKS + " strongest links (" + plural(hiddenLinks, "weaker link") + " under All links). " : ". ") +
     (against ? (against === 1 ? "1 dependency runs back up and closes a cycle: the domain marked “!” starts it." : against + " dependencies run back up and close cycles: the domains marked “!” start them.") : "No dependency runs back up.")));
   var details = el("p", { "class": "details", id: "details" }, "Hover or focus a domain to see its links. Open it to see its classes by layer.");
@@ -723,7 +757,7 @@ function level1(view) {
         g.appendChild(badge);
         fitNames[fitNames.length - 1].push(W - bw - 30);
       }
-      g.appendChild(sv("text", { "class": "sub", x: 12, y: 56 }, plural(n.classes, "class", "classes") + (n.kind === "none" ? " · no folder" : n.kind === "fold" ? " · show all" : "")));
+      g.appendChild(sv("text", { "class": "sub", x: 12, y: 56 }, plural(n.classes, "class", "classes") + (n.kind === "fold" ? " · show all" : "")));
       ["mouseenter", "focus"].forEach(function (ev) { g.addEventListener(ev, function () { activate(svg, n, m); }); });
       ["mouseleave", "blur"].forEach(function (ev) { g.addEventListener(ev, function () { activate(svg, null, m); }); });
       gn.appendChild(g);
@@ -751,7 +785,7 @@ function level1(view) {
     [SWATCH.badge, "“!” badge: the domain calls back up into a domain above it, closing a dependency cycle. Hover or focus it to see the red links."],
     [SWATCH.against, "Red with “!”: a link running back up."],
     [SWATCH.inferred, "Dotted: only inferred calls (resolved by name, not proven)."],
-    [SWATCH.fold, "Dashed box: the smaller domains, grouped."]]);
+    [SWATCH.fold, "Dashed box: the smaller domains, grouped."]].concat(common ? [[SWATCH.common, "Common: classes placed directly in type folders (Entity/, Enum/...), outside any domain folder."]] : []));
 }
 function freeSpot(path, tw, taken) {
   var len = path.getTotalLength(), best = null, bestScore = Infinity;
