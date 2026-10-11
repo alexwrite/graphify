@@ -1457,7 +1457,10 @@ def dispatch_command(cmd: str) -> None:
         if len(sys.argv) < 3:
             print("Usage: graphify affected \"<node-or-label>\" [--relation R] [--depth N] [--graph path]", file=sys.stderr)
             sys.exit(1)
-        from graphify.affected import DEFAULT_AFFECTED_RELATIONS, format_affected, load_graph
+        from graphify.affected import (
+            DEFAULT_AFFECTED_RELATIONS, load_graph, render_affected, resolve_seed_node,
+        )
+        from graphify.serve import _is_ambiguity_refusal
         query = sys.argv[2]
         graph_path = _default_graph_path()
         depth = 2
@@ -1512,13 +1515,16 @@ def dispatch_command(cmd: str) -> None:
         # --graph falls back to its own directory.
         from graphify.paths import GRAPHIFY_OUT_NAME
         graph_root = gp.parent.parent if gp.parent.name == GRAPHIFY_OUT_NAME else gp.parent
+        seed, refusal = resolve_seed_node(graph, query, graph_root)
+        if seed is None:
+            print(refusal, file=sys.stderr)
+            sys.exit(EXIT_AMBIGUOUS if _is_ambiguity_refusal(refusal) else EXIT_NOT_FOUND)
         print(
-            format_affected(
+            render_affected(
                 graph,
-                query,
+                seed,
                 relations=relations or DEFAULT_AFFECTED_RELATIONS,
                 depth=depth,
-                root=graph_root,
             )
         )
     elif cmd in ("god-nodes", "god_nodes"):

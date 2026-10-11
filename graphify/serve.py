@@ -1874,10 +1874,19 @@ def _resolve_single_node(G: nx.Graph, label: str) -> tuple[str | None, str | Non
     tier = source_exact or exact or prefix or substring
     if not tier:
         return None, f"No node matching '{label}' found."
-    refusal = _tier_refusal(G, label, tier, file_query=bool(source_exact) and "::" not in label)
+    refusal = _tier_refusal(G, label, tier, file_query=_is_file_lookup(G, label, source_exact))
     if refusal:
         return None, refusal
     return tier[0], None
+
+
+def _is_file_lookup(G: nx.Graph, label: str, source_exact: list[str]) -> bool:
+    """A plain path query whose tier opens on the file node; without one, its members tie."""
+    if not source_exact or "::" in label:
+        return False
+    head = _strip_diacritics(str(G.nodes[source_exact[0]].get("label") or "")).lower()
+    basename = _strip_diacritics(Path(label).name).lower()
+    return head == basename or head.endswith("/" + basename)
 
 
 def _tier_refusal(G: nx.Graph, label: str, tier: list[str], *, file_query: bool) -> str | None:
@@ -1980,11 +1989,7 @@ def _resolve_exact_node(G: nx.Graph, query: str) -> tuple[str | None, str | None
     source_exact, exact, _, _ = _find_node_tiers(G, query)
     hits = source_exact or exact
     if hits:
-        # A `path::symbol` hit also lands in `source_exact`; only a plain path
-        # query makes that tier a file lookup.
-        refusal = _tier_refusal(
-            G, query, hits, file_query=bool(source_exact) and "::" not in query
-        )
+        refusal = _tier_refusal(G, query, hits, file_query=_is_file_lookup(G, query, source_exact))
         if refusal:
             return None, refusal
         return hits[0], None

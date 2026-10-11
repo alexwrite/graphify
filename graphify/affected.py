@@ -4,9 +4,10 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-import unicodedata
 
 import networkx as nx
+
+from graphify.serve import _resolve_single_node
 
 
 DEFAULT_AFFECTED_RELATIONS = (
@@ -65,16 +66,6 @@ def _format_location(data: dict) -> str:
     return str(source_file)
 
 
-def _bare_name(label: str) -> str:
-    """Lowercased label with the callable decoration (trailing "()") removed."""
-    label = _normalize_label(label)
-    return label[:-2] if label.endswith("()") else label
-
-
-def _normalize_label(label: str) -> str:
-    return unicodedata.normalize("NFC", label).casefold()
-
-
 def _as_repo_relative(query: str, root: Path | None = None) -> str:
     """Repo-relative form of a path query, for matching a stored `source_file`.
 
@@ -108,120 +99,17 @@ def _as_repo_relative(query: str, root: Path | None = None) -> str:
     return path.as_posix()
 
 
-def _prefer_file_node(
-    graph: nx.Graph,
-    node_ids: list[str],
-    query: str,
-) -> str | None:
-    """Return the file-level node when a source_file query matches many nodes."""
-    query_basename = _normalize_label(Path(query).name)
-    exact_file_nodes = [
-        node_id
-        for node_id in node_ids
-        if str(graph.nodes[node_id].get("source_location", "")) == "L1"
-        and _normalize_label(str(graph.nodes[node_id].get("label", ""))) == query_basename
-    ]
-    if len(exact_file_nodes) == 1:
-        return exact_file_nodes[0]
-
-    l1_nodes = [
-        node_id
-        for node_id in node_ids
-        if str(graph.nodes[node_id].get("source_location", "")) == "L1"
-    ]
-    if len(l1_nodes) == 1:
-        return l1_nodes[0]
-
-    basename_nodes = [
-        node_id
-        for node_id in node_ids
-        if _normalize_label(str(graph.nodes[node_id].get("label", ""))) == query_basename
-    ]
-    if len(basename_nodes) == 1:
-        return basename_nodes[0]
-
-    return None
-
-
-def _is_sourced(graph: nx.Graph, node_id: str) -> bool:
-    return bool(str(graph.nodes[node_id].get("source_file") or ""))
-
-
-def _prefer_sourced_node(graph: nx.Graph, node_ids: list[str]) -> str | None:
-    """Return the one node with a source file among label rivals, else None.
-
-    Mirrors serve's `_find_node_tiers` exact-tier rule (#49): a sourceless node is
-    an unresolved-reference placeholder, so a real declaration sharing its label is
-    the answer rather than a tie. Without this, `explain` resolved the sourced node
-    while `affected` refused with "No unique node match" — #46's symptom.
-    """
-    sourced = [node_id for node_id in node_ids if _is_sourced(graph, node_id)]
-    return sourced[0] if len(sourced) == 1 else None
+def resolve_seed_node(
+    graph: nx.Graph, query: str, root: Path | None = None
+) -> tuple[str | None, str | None]:
+    """Resolve *query* as `explain` does, after making a `./` or absolute path repo-relative (#2706)."""
+    if query.startswith(("./", ".\\")) or Path(query).is_absolute():
+        query = _as_repo_relative(query, root)
+    return _resolve_single_node(graph, query)
 
 
 def resolve_seed(graph: nx.Graph, query: str, root: Path | None = None) -> str | None:
-    # A trailing path separator must not change a source-file match — serve's
-    # _find_node tokenizes the path (which drops it), so strip it here for parity
-    # (otherwise `affected "src/x.ts/"` returned None while `explain` resolved it).
-    query = query.rstrip("/\\") or query
-    if query in graph:
-        return query
-    query_lower = _normalize_label(query)
-    exact_label_matches = [
-        str(node_id)
-        for node_id, data in graph.nodes(data=True)
-        if _normalize_label(str(data.get("label", ""))) == query_lower
-    ]
-    if len(exact_label_matches) == 1 and _is_sourced(graph, exact_label_matches[0]):
-        return exact_label_matches[0]
-    if exact_label_matches:
-        sourced = _prefer_sourced_node(graph, exact_label_matches)
-        if sourced is not None:
-            return sourced
-        # A lone match that is a sourceless stub is NOT yet an answer: the real
-        # declaration may carry a decorated label ("handle()") that only the
-        # bare-name pass below reaches, and serve's exact tier — which matches
-        # both forms — would prefer it (#49). That pass is a superset of this
-        # one, so a stub with no sourced rival still resolves there.
-    # Callable labels are decorated ("name()"), so a bare "name" query falls
-    # through exact matching and then ties with any "name*" sibling in the
-    # contains pass. Match on the undecorated name before giving up.
-    query_bare = _bare_name(query_lower)
-    bare_name_matches = [
-        str(node_id)
-        for node_id, data in graph.nodes(data=True)
-        if _bare_name(str(data.get("label", ""))) == query_bare
-    ]
-    if len(bare_name_matches) == 1:
-        return bare_name_matches[0]
-    if bare_name_matches:
-        sourced = _prefer_sourced_node(graph, bare_name_matches)
-        if sourced is not None:
-            return sourced
-    # Compare paths in repo-relative form. Only this branch is path-shaped; the
-    # label branches above keep the query verbatim.
-    query_path = _normalize_label(_as_repo_relative(query, root))
-    exact_source_matches = [
-        str(node_id)
-        for node_id, data in graph.nodes(data=True)
-        if _normalize_label(str(data.get("source_file", ""))) in (query_lower, query_path)
-    ]
-    if len(exact_source_matches) == 1:
-        return exact_source_matches[0]
-    if exact_source_matches:
-        preferred_file_node = _prefer_file_node(
-            graph, exact_source_matches, _as_repo_relative(query, root)
-        )
-        if preferred_file_node is not None:
-            return preferred_file_node
-    contains_matches = [
-        str(node_id)
-        for node_id, data in graph.nodes(data=True)
-        if query_lower in _normalize_label(str(data.get("label", "")))
-    ]
-    if len(contains_matches) == 1:
-        return contains_matches[0]
-    return None
+    return resolve_seed_node(graph, query, root)[0]
 
 
 def affected_nodes(
@@ -300,11 +188,20 @@ def format_affected(
     depth: int = 2,
     root: Path | None = None,
 ) -> str:
-    relation_list = tuple(relations)
-    seed = resolve_seed(graph, query, root)
+    seed, refusal = resolve_seed_node(graph, query, root)
     if seed is None:
-        return f"No unique node match for {query}"
+        return str(refusal)
+    return render_affected(graph, seed, relations=relations, depth=depth)
 
+
+def render_affected(
+    graph: nx.Graph,
+    seed: str,
+    *,
+    relations: Iterable[str] = DEFAULT_AFFECTED_RELATIONS,
+    depth: int = 2,
+) -> str:
+    relation_list = tuple(relations)
     hits = affected_nodes(graph, seed, relations=relation_list, depth=depth)
     lines = [
         f"Affected nodes for {_node_label(graph, seed)}",

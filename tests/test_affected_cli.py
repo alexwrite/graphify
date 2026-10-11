@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 
 import networkx as nx
+import pytest
 from networkx.readwrite import json_graph
 
 import graphify.__main__ as mainmod
+from graphify.cli import EXIT_NOT_FOUND
 
 
 def _write_graph(tmp_path):
@@ -156,14 +158,17 @@ def test_resolve_seed_matches_unicode_normalized_label():
     assert resolve_seed(graph, unicodedata.normalize("NFD", "Auditoría")) == "a"
 
 
-def test_resolve_seed_preserves_distinct_accents():
-    from graphify.affected import resolve_seed
+def test_resolve_seed_folds_accents_like_explain():
+    """`explain` matches labels diacritic-insensitively, so `affected` refuses the same tie."""
+    from graphify.affected import resolve_seed_node
 
     graph = nx.DiGraph()
     graph.add_node("a", label="resume", source_file="pkg/resume.py")
     graph.add_node("b", label="résumé", source_file="pkg/resume_accented.py")
 
-    assert resolve_seed(graph, "resume") == "a"
+    seed, refusal = resolve_seed_node(graph, "resume")
+    assert seed is None
+    assert refusal is not None and refusal.startswith("Ambiguous: 'resume' matches 2 nodes")
 
 
 def test_resolve_seed_bare_name_tie_still_returns_none():
@@ -392,8 +397,10 @@ def test_affected_absolute_seed_outside_root_misses_cleanly(tmp_path, monkeypatc
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(mainmod.sys, "argv",
                         ["graphify", "affected", outside_seed, "--graph", str(gp)])
-    mainmod.main()
+    with pytest.raises(SystemExit) as exc:
+        mainmod.main()
 
+    assert exc.value.code == EXIT_NOT_FOUND
     out = capsys.readouterr().out
     assert "Affected nodes for Foo" not in out          # must NOT resolve to the in-root Foo
 
