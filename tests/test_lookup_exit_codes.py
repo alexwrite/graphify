@@ -126,3 +126,51 @@ def test_query_without_any_match_exits_not_found(monkeypatch, tmp_path, capsys):
         "query", "zzqqxx", "--graph", str(_write_graph(tmp_path)))
     assert code == EXIT_NOT_FOUND
     assert "No matching nodes found." in out
+
+
+@pytest.mark.parametrize("seed", ["src/b.ts::BetaClient", "BetaClient", "src_b_betaclient"])
+def test_affected_answer_exits_zero(monkeypatch, tmp_path, capsys, seed):
+    code, out = _run(monkeypatch, capsys, "affected", seed, "--graph", str(_write_graph(tmp_path)))
+    assert code is None
+    assert "Affected nodes for BetaClient" in out
+    assert "run()" in out
+
+
+def test_affected_ambiguous_exits_ambiguous(monkeypatch, tmp_path, capsys):
+    code, out = _run(monkeypatch, capsys, "affected", ".nonce()", "--graph", str(_write_graph(tmp_path)))
+    assert code == EXIT_AMBIGUOUS
+    assert "Ambiguous: '.nonce()' matches 2 nodes in different files." in out
+    assert "src_a_alphaclient_nonce" in out and "src_b_betaclient_nonce" in out
+
+
+@pytest.mark.parametrize("seed", [".nonce()", "NoSuchSymbolXyz"])
+def test_affected_refusal_leaves_stdout_empty(monkeypatch, tmp_path, capsys, seed):
+    """A script parsing the hit list must never read a refusal as one."""
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv",
+                        ["graphify", "affected", seed, "--graph", str(_write_graph(tmp_path))])
+    with pytest.raises(SystemExit):
+        mainmod.main()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert seed in captured.err
+
+
+@pytest.mark.parametrize("seed", ["NoSuchSymbolXyz", "src/a.ts::NotThere"])
+def test_affected_miss_exits_not_found(monkeypatch, tmp_path, capsys, seed):
+    code, out = _run(monkeypatch, capsys, "affected", seed, "--graph", str(_write_graph(tmp_path)))
+    assert code == EXIT_NOT_FOUND
+    assert "Affected nodes" not in out
+
+
+@pytest.mark.parametrize("seed", [
+    "src/b.ts::.nonce()", "src/a.ts::AlphaClient", "BetaClient", "run()", "run",
+    "src/c.ts", ".nonce()", "nonce", "NoSuchSymbolXyz", "src/a.ts::NotThere",
+])
+def test_affected_resolves_the_node_explain_resolves(tmp_path, seed):
+    """`affected` and `explain` name the same node, or refuse the same lookup."""
+    from graphify.affected import load_graph, resolve_seed_node
+    from graphify.serve import _resolve_single_node
+
+    graph = load_graph(_write_graph(tmp_path))
+    assert resolve_seed_node(graph, seed) == _resolve_single_node(graph, seed)
