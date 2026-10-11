@@ -2434,3 +2434,173 @@ def test_same_file_dnf_typed_property_emits_no_edge_and_references_its_types(tmp
     ctrl = _find(r, "Ctrl", "d_ctrl")
     assert (ctrl, _find(r, "Alpha", "d_alpha")) in refs
     assert (ctrl, _find(r, "Beta", "d_beta")) in refs
+
+
+# ── Closures and arrow functions (#22) ───────────────────────────────────────
+#
+# A closure is its own caller node (`{closure#N}()`), walked with its own
+# receiver table. `$this->prop` inside it types exactly as in the enclosing
+# method, unless `$this` is unavailable (static closure, static method) or may
+# be rebound (`bind`, `bindTo`, `call`, `macro`, `mixin` in the method).
+
+
+def _closure_controller(method: str, uses: str = "", static: bool = False) -> str:
+    return (
+        "<?php\n"
+        "namespace App\\Http\\Controllers;\n"
+        "use App\\Services\\LeadHunterService;\n"
+        f"{uses}"
+        "class LeadController {\n"
+        "    public function __construct(private LeadHunterService $leadHunter) {}\n"
+        f"    public {'static ' if static else ''}function index(): mixed {{\n"
+        f"        {method}\n"
+        "    }\n"
+        "}\n"
+    )
+
+
+def _closure_edges(r: dict, calls: dict) -> set[str]:
+    """Targets of every `calls` edge whose caller is a closure of LeadController."""
+    closures = {
+        node["id"] for node in r["nodes"]
+        if node.get("label", "").startswith("{closure#") and "leadcontroller" in node["id"]
+    }
+    assert closures, "the closure must exist as a caller node"
+    return {tgt for src, tgt in calls if src in closures}
+
+
+def test_closure_this_prop_call_resolves(tmp_path: Path):
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "$f = function () { return $this->leadHunter->search([]); };\n"
+            "        return $f();"
+        ),
+    })
+
+    closure = _find(r, "{closure#1}()", "leadcontroller")
+    service_search = _find(r, ".search()", "leadhunterservice")
+    assert (closure, service_search) in calls
+    assert (closure, _find(r, ".search()", "auditlog")) not in calls
+    edge = calls[(closure, service_search)]
+    assert edge["confidence"] == "INFERRED"
+    assert edge["confidence_score"] == 0.85
+
+
+def test_arrow_fn_this_prop_call_resolves(tmp_path: Path):
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "return array_map(fn ($x) => $this->leadHunter->search([$x]), [1]);"
+        ),
+    })
+
+    closure = _find(r, "{closure#1}()", "leadcontroller")
+    service_search = _find(r, ".search()", "leadhunterservice")
+    assert (closure, service_search) in calls
+    assert (closure, _find(r, ".search()", "auditlog")) not in calls
+    assert calls[(closure, service_search)]["confidence_score"] == 0.85
+
+
+def test_nested_closure_this_prop_call_resolves(tmp_path: Path):
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "$f = function () { return array_map(fn ($x) => $this->leadHunter->search([$x]), [1]); };\n"
+            "        return $f();"
+        ),
+    })
+
+    service_search = _find(r, ".search()", "leadhunterservice")
+    assert service_search in _closure_edges(r, calls)
+    assert _find(r, ".search()", "auditlog") not in _closure_edges(r, calls)
+
+
+def test_closure_typed_param_call_resolves(tmp_path: Path):
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "$f = function (LeadHunterService $s) { return $s->search([]); };\n"
+            "        return $f($this->leadHunter);"
+        ),
+    })
+
+    assert _find(r, ".search()", "leadhunterservice") in _closure_edges(r, calls)
+    assert _find(r, ".search()", "auditlog") not in _closure_edges(r, calls)
+
+
+def test_static_closure_this_prop_call_refused(tmp_path: Path):
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "$f = static function () { return $this->leadHunter->search([]); };\n"
+            "        $g = static fn () => $this->leadHunter->search([]);\n"
+            "        return [$f(), $g()];"
+        ),
+    })
+
+    assert not any("search" in tgt for tgt in _closure_edges(r, calls))
+
+
+def test_closure_in_static_method_this_prop_call_refused(tmp_path: Path):
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "$f = function () { return $this->leadHunter->search([]); };\n"
+            "        return $f();",
+            static=True,
+        ),
+    })
+
+    assert not any("search" in tgt for tgt in _closure_edges(r, calls))
+
+
+def test_rebound_closure_this_prop_call_refused(tmp_path: Path):
+    """`$this` inside a closure handed to `macro`/`Closure::bind` is whatever
+    object it is bound to later, not the declaring class."""
+    for i, wiring in enumerate((
+        "\\Closure::bind(function () { return $this->leadHunter->search([]); }, $o, null);",
+        "Collection::macro('hunt', function () { return $this->leadHunter->search([]); });",
+        "$f = function () { return $this->leadHunter->search([]); }; $f->bindTo($o);",
+    )):
+        case = tmp_path / f"case{i}"
+        calls, r = _calls(case, {
+            **_CORPUS,
+            "app/Http/Controllers/LeadController.php": _closure_controller(
+                wiring + "\n        return null;"
+            ),
+        })
+        assert not any("search" in tgt for tgt in _closure_edges(r, calls)), wiring
+
+
+def test_closure_param_and_use_shadow_refused(tmp_path: Path):
+    """A closure parameter or `use` capture named like a typed outer local is
+    not that local's binding: no edge, to the right class or the decoy."""
+    calls, r = _calls(tmp_path, {
+        **_CORPUS,
+        "app/Http/Controllers/LeadController.php": _closure_controller(
+            "$svc = new LeadHunterService();\n"
+            "        $f = function ($svc) { return $svc->search([]); };\n"
+            "        $g = function () use ($svc) { $svc->search([]); $svc = new AuditLog(); };\n"
+            "        $h = fn () => $svc->search([]);\n"
+            "        return [$f(null), $g(), $h()];",
+            uses="use App\\Audit\\AuditLog;\n",
+        ),
+    })
+
+    assert not any("search" in tgt for tgt in _closure_edges(r, calls))
+
+
+def test_closure_binding_agrees_across_an_incremental_rebuild(tmp_path: Path):
+    controller = "app/Http/Controllers/LeadController.php"
+    (full_calls, full), (inc_calls, inc) = _full_then_incremental(tmp_path, {
+        **_CORPUS,
+        controller: _closure_controller(
+            "$f = function () { return $this->leadHunter->search([]); };\n"
+            "        return $f();"
+        ),
+    }, changed=controller)
+
+    service_search = _find(full, ".search()", "leadhunterservice")
+    assert (_find(full, "{closure#1}()", "leadcontroller"), service_search) in full_calls
+    assert (_find(inc, "{closure#1}()", "leadcontroller"), service_search) in inc_calls

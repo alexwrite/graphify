@@ -903,9 +903,9 @@ def _php_multi_typed_annotation(type_node) -> bool:
 
 # Subtrees that are a DIFFERENT binding scope than the method being scanned:
 # their assignments must not type the enclosing method's variables. Closures are
-# deliberately absent — their calls are attributed to the enclosing method, so
-# their locals belong to the same raw-call scope (their PARAMETERS are poisoned
-# separately, since a shadowed name cannot be told apart from the outer one).
+# deliberately absent, which keeps the method's table conservative: a closure's
+# locals still poison or bind the outer names (its PARAMETERS are poisoned
+# separately). The closure itself gets its own table (#22).
 _PHP_FOREIGN_SCOPE_TYPES = frozenset({
     "anonymous_class",
     "class_declaration",
@@ -917,6 +917,49 @@ _PHP_FOREIGN_SCOPE_TYPES = frozenset({
 })
 
 _PHP_CLOSURE_TYPES = frozenset({"anonymous_function", "arrow_function"})
+
+# Calls that can hand a closure a different `$this` (`Closure::bind`,
+# `->bindTo()`, `->call()`, Laravel `macro`/`mixin`), compared case-folded.
+_PHP_CLOSURE_REBINDING_CALLS = frozenset({"bind", "bindto", "call", "macro", "mixin"})
+
+
+def _php_has_static_modifier(node) -> bool:
+    return any(c.type == "static_modifier" for c in node.children)
+
+
+def _php_closure_enclosing_method(closure_node, source: bytes):
+    """Return ``(method_node, this_available)`` for the method a PHP closure sits in.
+
+    ``(None, False)`` when no method encloses it before a foreign scope (a named
+    function, a class body). ``$this`` is unavailable when the method or any
+    closure on the way up is ``static``, or when the method contains a call that
+    can rebind a closure's ``$this`` to another object.
+    """
+    this_available = not _php_has_static_modifier(closure_node)
+    node = closure_node.parent
+    while node is not None:
+        if node.type in _PHP_CLOSURE_TYPES:
+            this_available = this_available and not _php_has_static_modifier(node)
+        elif node.type == "method_declaration":
+            break
+        elif node.type in _PHP_FOREIGN_SCOPE_TYPES:
+            return None, False
+        node = node.parent
+    if node is None:
+        return None, False
+    if this_available and _php_has_static_modifier(node):
+        this_available = False
+    stack = [node]
+    while this_available and stack:
+        current = stack.pop()
+        if current.type in ("member_call_expression", "nullsafe_member_call_expression",
+                            "scoped_call_expression"):
+            name = current.child_by_field_name("name")
+            if (name is not None
+                    and _read_text(name, source).casefold() in _PHP_CLOSURE_REBINDING_CALLS):
+                this_available = False
+        stack.extend(current.children)
+    return node, this_available
 
 
 def _php_method_receiver_types(
@@ -1074,6 +1117,72 @@ def _php_method_receiver_types(
         # name (popped just above) falls back to the multi-class refusal.
         table.setdefault(name, None)
     return table
+
+
+def _php_closure_receiver_types(
+    closure_node,
+    source: bytes,
+    field_types: dict[str, _PhpReceiverType | None],
+) -> dict[str, _PhpReceiverType | None]:
+    """Build the receiver table of one PHP closure or arrow function (#22).
+
+    ``field_types`` is the enclosing class's property table, or empty when
+    ``$this`` is unavailable (see ``_php_closure_enclosing_method``). Bare keys
+    come from the closure's own parameters and locals only: a ``use`` capture,
+    and in an arrow function every non-parameter name, holds the OUTER value,
+    so such a name is dropped (untyped) rather than typed from a later rebind.
+    """
+    table = _php_method_receiver_types(closure_node, source, field_types)
+    if closure_node.type == "arrow_function":
+        params = closure_node.child_by_field_name("parameters")
+        own = {
+            _read_text(name, source).lstrip("$")
+            for param in (params.children if params is not None else ())
+            if (name := param.child_by_field_name("name")) is not None
+        }
+        captured = {key for key in table if not key.startswith("this.") and key not in own}
+    else:
+        # `use ($a, &$b)`: a by-reference capture wraps its variable in `by_ref`.
+        captured = {
+            _read_text(var, source).lstrip("$")
+            for clause in closure_node.children
+            if clause.type == "anonymous_function_use_clause"
+            for item in clause.named_children
+            for var in ([item] if item.type == "variable_name" else item.named_children)
+            if var.type == "variable_name"
+        }
+    for name in captured:
+        table.pop(name, None)
+    return table
+
+
+def _php_closure_receiver_tables(function_bodies, method_scopes, field_types, source: bytes):
+    """Receiver tables for one PHP file's closures, keyed by ``id(body)`` (#22).
+
+    The walk reaches a closure with no class context, so it never enters
+    ``method_scopes``: its table is built from the method that lexically
+    encloses it, with that class's property types only where ``$this`` is
+    available.
+    """
+    class_by_method = {
+        method_node.start_byte: class_nid
+        for method_node, class_nid in method_scopes.values()
+    }
+    tables = {}
+    for _caller_nid, body_node in function_bodies:
+        closure_node = body_node.parent
+        if closure_node is None or closure_node.type not in _PHP_CLOSURE_TYPES:
+            continue
+        method_node, this_available = _php_closure_enclosing_method(closure_node, source)
+        class_nid = class_by_method.get(method_node.start_byte) if method_node else None
+        if class_nid is None:
+            continue
+        tables[id(body_node)] = _php_closure_receiver_types(
+            closure_node,
+            source,
+            field_types.get(class_nid, {}) if this_available else {},
+        )
+    return tables
 
 
 def _php_ctor_assigned_field_types(
@@ -7910,6 +8019,10 @@ def _extract_generic(
         )
         for body_id, (method_node, class_nid) in php_method_scopes.items()
     }
+    if config.ts_module == "tree_sitter_php" and php_method_scopes:
+        php_receiver_types.update(_php_closure_receiver_tables(
+            function_bodies, php_method_scopes, php_field_types, source,
+        ))
 
     def _emit_indirect_by_name(ident_name: str, loc_node, scope_nid: str,
                                context: str) -> None:
