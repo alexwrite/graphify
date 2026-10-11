@@ -37,7 +37,7 @@ except Exception:
     _EXTRACTOR_VERSION = "unknown"
 
 # Bump when AST cache-key semantics change independently of the package version.
-_AST_CACHE_SCHEMA = 9  # PHP `renders` edges to Twig templates.
+_AST_CACHE_SCHEMA = 10  # Blade views resolved to their file, PHP `renders` edges to Blade views.
 
 
 # Per-process memo: distributions() scans site-packages metadata, which is
