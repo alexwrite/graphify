@@ -2974,11 +2974,12 @@ def dispatch_command(cmd: str) -> None:
 
     elif cmd == "export":
         subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
-        if subcmd not in ("html", "callflow-html", "obsidian", "wiki", "svg", "graphml", "neo4j", "falkordb"):
+        if subcmd not in ("html", "callflow-html", "zoom-html", "obsidian", "wiki", "svg", "graphml", "neo4j", "falkordb"):
             print("Usage: graphify export <format>", file=sys.stderr)
             print("  html      [--graph PATH] [--labels PATH] [--node-limit N] [--no-viz]", file=sys.stderr)
             print("  callflow-html [GRAPH|DIR] [--graph PATH] [--labels PATH] [--report PATH] [--sections PATH] [--output HTML]", file=sys.stderr)
             print("            [--lang auto|zh-CN|en] [--max-sections N] [--diagram-scale N]", file=sys.stderr)
+            print("  zoom-html [--graph PATH] [--output HTML] [--label NAME]", file=sys.stderr)
             print("  obsidian  [--graph PATH] [--labels PATH] [--dir PATH]", file=sys.stderr)
             print("  wiki      [--graph PATH] [--labels PATH]", file=sys.stderr)
             print("  svg       [--graph PATH] [--labels PATH]", file=sys.stderr)
@@ -3004,6 +3005,7 @@ def dispatch_command(cmd: str) -> None:
         callflow_diagram_scale = 1.0
         callflow_max_diagram_nodes = 18
         callflow_max_diagram_edges = 24
+        zoom_label: str | None = None
         analysis_path = Path(_GRAPHIFY_OUT) / ".graphify_analysis.json"
         node_limit = 5000
         no_viz = False
@@ -3063,6 +3065,8 @@ def dispatch_command(cmd: str) -> None:
                 print("  --max-diagram-nodes N  representative nodes per section (default 18)")
                 print("  --max-diagram-edges N  representative edges per section (default 24)")
                 sys.exit(0)
+            elif a == "--label" and i + 1 < len(args) and subcmd == "zoom-html":
+                zoom_label = args[i + 1]; i += 2
             elif a == "--node-limit" and i + 1 < len(args):
                 node_limit = int(args[i + 1]); i += 2
             elif a == "--no-viz":
@@ -3118,6 +3122,20 @@ def dispatch_command(cmd: str) -> None:
                 verbose=True,
             )
             print(f"callflow HTML written - open in any browser: {out}")
+            sys.exit(0)
+
+        if subcmd == "zoom-html":
+            from graphify.zoom_html import write_zoom_html as _write_zoom_html
+            try:
+                out = _write_zoom_html(
+                    graph_path,
+                    callflow_output or graph_path.parent / "GRAPH_ZOOM.html",
+                    project_label=zoom_label,
+                )
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(f"zoom HTML written - open in any browser: {out}")
             sys.exit(0)
 
         from networkx.readwrite import json_graph as _jg
