@@ -989,6 +989,8 @@ def _run_cli() -> None:
         print("  export callflow-html    emit Mermaid-based architecture/call-flow HTML")
         print("                          [GRAPH|DIR] [--graph PATH] [--labels PATH] [--report PATH] [--sections PATH] [--output HTML]")
         print("                          [--lang auto|zh-CN|en] [--max-sections N] [--diagram-scale N]")
+        print("  export zoom-html        emit an offline three-level architecture view (domains, layers, class)")
+        print("                          [--graph PATH] [--output HTML] [--label NAME]")
         print("  export obsidian         emit Obsidian vault notes + canvas [--graph PATH] [--labels PATH] [--dir PATH]")
         print("  export wiki             emit wiki markdown articles [--graph PATH] [--labels PATH]")
         print("  export svg              emit graph.svg [--graph PATH] [--labels PATH]")
