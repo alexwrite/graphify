@@ -37,7 +37,7 @@ except Exception:
     _EXTRACTOR_VERSION = "unknown"
 
 # Bump when AST cache-key semantics change independently of the package version.
-_AST_CACHE_SCHEMA = 9  # PHP closure receiver types in persisted raw calls (#22).
+_AST_CACHE_SCHEMA = 10  # PHP static calls as `(static)` member raw calls (#23).
 
 
 # Per-process memo: distributions() scans site-packages metadata, which is

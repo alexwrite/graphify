@@ -351,8 +351,8 @@ def test_untyped_receiver_keeps_same_file_edge(tmp_path: Path):
     assert (get, fetch) in calls
 
 
-def test_static_call_edge_unchanged(tmp_path: Path):
-    """`Class::method()` still targets the CLASS node, as before this feature."""
+def test_static_call_targets_the_declared_method(tmp_path: Path):
+    """`Class::method()` targets the method the class declares, not the class (#23)."""
     calls, r = _calls(tmp_path, {
         "app/Context/SucursalContext.php": (
             "<?php\nnamespace App\\Context;\n"
@@ -374,7 +374,8 @@ def test_static_call_edge_unchanged(tmp_path: Path):
 
     index = _find(r, ".index()", "leadcontroller")
     context_class = _find(r, "SucursalContext", "app_context_sucursalcontext_sucursalcontext")
-    assert (index, context_class) in calls
+    assert (index, _find(r, ".id()", "sucursalcontext")) in calls
+    assert (index, context_class) not in calls
 
 
 # ── Inline instantiation receivers: `(new Service())->method()` (#3) ──────────

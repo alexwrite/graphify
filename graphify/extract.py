@@ -5628,7 +5628,11 @@ def _resolve_php_member_calls(
 
     Receiver ``this`` binds to the caller's enclosing class (exact). Receiver
     ``this.<prop>`` carries the type stamped by the extractor from the class's
-    typed properties and constructor-promoted params (inferred). A missing or
+    typed properties and constructor-promoted params (inferred). Receiver
+    ``(static)`` is the class a ``Foo::bar()`` scope names (#23), typed like
+    ``(new)`` and also exact when a ``use`` import or the calling file itself
+    names the class; when that class declares no ``bar`` (inherited,
+    ``__callStatic``), the edge goes to the class itself, as it always did. A missing or
     ambiguous receiver type is skipped rather than falling back to a bare
     method-name match — a Laravel corpus has many identically named service
     methods, and guessing between them is worse than an absent edge.
@@ -5765,7 +5769,7 @@ def _resolve_php_member_calls(
                 if len(type_defs) != 1:
                     continue  # short name collides across the corpus: refuse
                 type_nid = type_defs[0]
-            if receiver == "(new)":
+            if receiver in ("(new)", "(static)"):
                 # The class is named in the source; promote to EXTRACTED
                 # only when the written namespace backs the node we found.
                 type_node = node_by_id.get(type_nid)
@@ -5774,8 +5778,18 @@ def _resolve_php_member_calls(
                     type_node,
                     declared_fqn(type_node),
                 )
+                if receiver == "(static)" and not exact:
+                    # A `use` import or a same-file declaration is the import
+                    # evidence that made the old class-level edge EXTRACTED (#23).
+                    exact = bool(resolved) or (
+                        (type_node or {}).get("source_file") == raw_call.get("source_file")
+                    )
 
         method_nids = method_index.get((type_nid, key(callee)), set())
+        if not method_nids and receiver == "(static)":
+            # `Foo::where()` reaching an inherited or magic method still names
+            # Foo: keep the class-level edge static calls always had (#23).
+            method_nids = {type_nid}
         if len(method_nids) != 1:
             continue  # the typed receiver's class has no such method: refuse
         method_nid = next(iter(method_nids))

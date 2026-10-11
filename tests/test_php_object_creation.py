@@ -67,14 +67,15 @@ def test_dynamic_and_self_construction_produce_no_junk(tmp_path):
     assert "self" not in labels and "static" not in labels
 
 
-def test_existing_static_call_edges_are_unchanged(tmp_path):
+def test_static_call_resolves_to_the_method_not_the_class(tmp_path):
     calls, _ = _extract(tmp_path, {"Baz.php": (
         "<?php\nnamespace App;\nclass Baz {\n"
         "    public static function create(): self { return new self(); }\n}\n"),
         "Caller.php": (
         "<?php\nnamespace App;\nclass Caller {\n"
         "    public function run() { return Baz::create(); }\n}\n")})
-    assert any(s == ".run()" and "Baz" in t for s, t in calls)
+    assert (".run()", ".create()") in calls
+    assert (".run()", "Baz") not in calls
 
 
 def test_cross_file_dispatcher_reaches_the_command_class(tmp_path):
