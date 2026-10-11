@@ -4,6 +4,12 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 
 ## Unreleased
 
+**Blade views resolved to their file (`alexwrite/graphify#4`):**
+
+- Fix: `@extends('layouts.app')` and `@include('partials.nav')` point at the view file's own node (`resources/views/layouts/app.blade.php`) instead of a stub `layouts/app`, resolved like Laravel's `FileViewFinder` (dots to slashes, `blade.php` then `php`, default `resources/views` path). A namespaced (`pkg::view`), dynamic or missing view keeps its stub. Repeated includes of one view are one edge.
+- Feature: `view('...')`, `View::make('...')` and `response()->view('...')` with a literal name get a `renders` edge to the view file. AST cache schema 10.
+- Not covered: view locations added at runtime (`View::addLocation`, themes) and `loadViewsFrom` namespaces.
+
 **Twig templates and controller-to-template links (`alexwrite/graphify#19`):**
 
 - Feature: `.twig` files are extracted (Twig extractor from Graphify-Labs/graphify#2240, Twig part only). `{% extends %}`, `{% include %}`, `{% embed %}`, `{% import %}`, `{% from %}`, `{% use %}` and `include()`/`source()` link to the real template file node; blocks and Drupal `attach_library()` are recorded too.
