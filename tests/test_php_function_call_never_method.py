@@ -273,3 +273,88 @@ def test_other_languages_keep_binding_bare_calls_to_methods(tmp_path):
     caller = _find(result, ".caller()", "_a_a_caller")
     method = _find(result, ".event()", "_b_b_event")
     assert (caller, method) in calls
+
+
+# ── Same file (#14): the in-file bind obeys the same rule ────────────────────
+#
+# A call whose name matches a definition in its own file never reached the
+# cross-file pass above: the extractor bound it in-file by name, so `round2(...)`
+# inside a class declaring a `round2()` METHOD became a self-loop at EXTRACTED.
+
+ROUNDING_CALLER = (
+    "<?php\nnamespace App;\n"
+    "class Money {\n"
+    "    private function round2(float $amount): float { return round2($amount); }\n"
+    "    public function total(float $a): float { return $this->round2($a); }\n"
+    "}\n"
+)
+ROUNDING_FUNCTION = "<?php\nnamespace App;\nfunction round2(float $v): float { return $v; }\n"
+
+
+def test_same_file_function_call_does_not_bind_to_the_method(tmp_path):
+    result, calls = _extract(tmp_path, {"app/Money.php": ROUNDING_CALLER})
+    method = _find(result, ".round2()", "money")
+    assert (method, method) not in calls
+
+
+def test_same_file_function_call_reaches_the_global_function(tmp_path):
+    result, calls = _extract(tmp_path, {
+        "app/Money.php": ROUNDING_CALLER,
+        "app/functions.php": ROUNDING_FUNCTION,
+    })
+    method = _find(result, ".round2()", "money")
+    function = _find(result, "round2()", "functions")
+    assert (method, function) in calls
+    assert (method, method) not in calls
+
+
+def test_same_file_this_call_still_binds_to_the_method(tmp_path):
+    result, calls = _extract(tmp_path, {"app/Money.php": ROUNDING_CALLER})
+    edge = calls[(_find(result, ".total()", "money"), _find(result, ".round2()", "money"))]
+    assert edge["confidence"] == "EXTRACTED"
+
+
+def test_same_file_function_call_does_not_bind_to_a_class(tmp_path):
+    result, calls = _extract(tmp_path, {"app/Caller.php": (
+        "<?php\nnamespace App;\n"
+        "class Report { }\n"
+        "class Caller {\n    public function handle(): void { Report($e); }\n}\n"
+    )})
+    caller = _find(result, ".handle()", "caller")
+    assert (caller, _find(result, "Report", "report")) not in calls
+
+
+def test_same_file_function_call_does_not_bind_to_an_interface(tmp_path):
+    result, calls = _extract(tmp_path, {"app/Caller.php": (
+        "<?php\nnamespace App;\n"
+        "interface Notifier { }\n"
+        "class Caller {\n    public function handle(): void { Notifier($e); }\n}\n"
+    )})
+    caller = _find(result, ".handle()", "caller")
+    assert not any(src == caller and "notifier" in tgt for src, tgt in calls)
+
+
+def test_same_file_function_still_binds_in_file(tmp_path):
+    """Positive control: a real function of the same file keeps its edge."""
+    result, calls = _extract(tmp_path, {"app/Caller.php": (
+        "<?php\nnamespace App;\n"
+        "function helper(): void { }\n"
+        "class Caller {\n    public function handle(): void { helper(); }\n}\n"
+    )})
+    edge = calls[(_find(result, ".handle()", "caller"), _find(result, "helper()", "caller"))]
+    assert edge["confidence"] == "EXTRACTED"
+
+
+def test_same_file_refusal_agrees_across_an_incremental_rebuild(tmp_path):
+    from tests.test_php_member_calls import _full_then_incremental
+
+    (full_calls, full), (inc_calls, inc) = _full_then_incremental(tmp_path, {
+        "app/Money.php": ROUNDING_CALLER,
+        "app/functions.php": ROUNDING_FUNCTION,
+    }, changed="app/Money.php")
+
+    function = _find(full, "round2()", "functions")
+    assert (_find(full, ".round2()", "money"), function) in full_calls
+    method = _find(inc, ".round2()", "money")
+    assert (method, function) in inc_calls
+    assert (method, method) not in inc_calls
