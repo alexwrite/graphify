@@ -13,28 +13,70 @@ from graphify.zoom_html import (
     build_zoom_data,
     classify_domain,
     classify_layer,
+    detect_layout,
     write_zoom_html,
 )
 
 PYTHON = sys.executable
 
 
-@pytest.mark.parametrize("path,root,layer,domain", [
-    ("src/Item/Controller/ItemController.php", "src", "controller", "Item"),
-    ("src/Item/Entity/Item.php", "src", "entity", "Item"),
-    ("src/Item/Pricing/PriceRule.php", "src", "other", "Item"),
-    ("src/Controller/Item/ItemListController.php", "src", "controller", "Item"),
-    ("src/Repository/ItemRepository.php", "src", "repository", None),
-    ("src/Kernel.php", "src", "other", None),
-    ("app/Http/Controllers/Item/ItemController.php", "app", "controller", "Item"),
-    ("app/Http/Middleware/Locale.php", "app", "other", "Http"),
-    ("app/Models/Item.php", "app", "entity", None),
-    ("app/Services/Item/ItemService.php", "app", "service", "Item"),
-    ("lib/Item/Service/ItemService.php", "src", "service", None),
+@pytest.mark.parametrize("path,root,layout,layer,domain", [
+    ("src/Item/Controller/ItemController.php", "src", "by-domain", "controller", "Item"),
+    ("src/Item/Entity/Item.php", "src", "by-domain", "entity", "Item"),
+    ("src/Item/Pricing/PriceRule.php", "src", "by-domain", "other", "Item"),
+    ("src/Command/ImportCommand.php", "src", "by-domain", "other", None),
+    ("src/Kernel.php", "src", "by-domain", "other", None),
+    ("src/Controller/Item/ItemListController.php", "src", "by-type", "controller", "Item"),
+    ("src/Service/Order/OrderService.php", "src", "by-type", "service", "Order"),
+    ("src/Repository/ItemRepository.php", "src", "by-type", "repository", None),
+    ("src/Form/Type/ItemType.php", "src", "by-type", "other", None),
+    ("src/Security/Voter/ItemVoter.php", "src", "by-type", "other", None),
+    ("src/Sitemap/Provider/ItemUrls.php", "src", "by-type", "other", "Sitemap"),
+    ("app/Http/Controllers/Item/ItemController.php", "app", "by-type", "controller", "Item"),
+    ("app/Http/Middleware/Locale.php", "app", "by-type", "other", None),
+    ("app/Models/Item.php", "app", "by-type", "entity", None),
+    ("app/Services/Item/ItemService.php", "app", "by-type", "service", "Item"),
+    ("lib/Item/Service/ItemService.php", "src", "by-type", "service", None),
 ])
-def test_layer_and_domain_come_from_folder_names_only(path, root, layer, domain):
+def test_layer_and_domain_come_from_folder_names_only(path, root, layout, layer, domain):
     assert classify_layer(path, root) == layer
-    assert classify_domain(path, root) == domain
+    assert classify_domain(path, root, layout) == domain
+
+
+def test_layout_is_by_type_when_most_classes_sit_below_type_folders():
+    by_type = ["src/Controller/Item/A.php", "src/Entity/B.php", "src/Enum/C.php", "src/Sitemap/D.php", "tests/E/F.php"]
+    by_domain = ["src/Item/Controller/A.php", "src/Item/Entity/B.php", "src/Order/C.php", "src/Command/D.php"]
+    assert detect_layout(by_type, "src") == "by-type"
+    assert detect_layout(by_domain, "src") == "by-domain"
+    assert detect_layout([], None) == "by-domain"
+
+
+def _by_type_graph() -> dict:
+    files = {
+        "ctl": ("ItemController", "src/Controller/Item/ItemController.php"),
+        "svc": ("ItemService", "src/Service/Item/ItemService.php"),
+        "osvc": ("OrderService", "src/Service/Order/OrderService.php"),
+        "ent": ("Item", "src/Entity/Item.php"),
+        "repo": ("ItemRepository", "src/Repository/ItemRepository.php"),
+        "cmd": ("ImportItemsCommand", "src/Command/ImportItemsCommand.php"),
+        "form": ("ItemType", "src/Form/Type/ItemType.php"),
+        "enum": ("ItemStatus", "src/Enum/ItemStatus.php"),
+        "fix": ("ItemFixtures", "src/DataFixtures/ItemFixtures.php"),
+        "sub": ("ItemSubscriber", "src/EventSubscriber/ItemSubscriber.php"),
+        "map": ("ItemUrls", "src/Sitemap/Provider/ItemUrls.php"),
+    }
+    return {"nodes": [{"id": k, "label": v[0], "source_file": v[1], "_callable_class": True} for k, v in files.items()],
+            "links": []}
+
+
+def test_by_type_project_shows_business_domains_and_an_explicit_common_group():
+    data = build_zoom_data(_by_type_graph())
+    assert data["layout"] == "by-type"
+    groups = {d["name"]: d["classes"] for d in data["domains"]}
+    assert groups == {"Item": 2, "Order": 1, "Sitemap": 1, "Common": 7}
+    assert {d["kind"] for d in data["domains"] if d["name"] == "Common"} == {"none"}
+    for technical in ("Command", "Form", "Enum", "DataFixtures", "EventSubscriber", "Entity", "Repository"):
+        assert technical not in groups
 
 
 def _cls(cid, label, path):
