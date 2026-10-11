@@ -4,6 +4,13 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 
 ## Unreleased
 
+**Twig templates and controller-to-template links (`alexwrite/graphify#19`):**
+
+- Feature: `.twig` files are extracted (Twig extractor from Graphify-Labs/graphify#2240, Twig part only). `{% extends %}`, `{% include %}`, `{% embed %}`, `{% import %}`, `{% from %}`, `{% use %}` and `include()`/`source()` link to the real template file node; blocks and Drupal `attach_library()` are recorded too.
+- Fix: a bare Twig name resolves against the loader root (the enclosing `templates/` dir) only, never against the referring file's own directory, and a Symfony `@Namespace/` name stays a stub instead of being matched against the app's templates. Drupal `@extension/` names resolve under that extension, as core does.
+- Feature: a PHP method that renders a literal template name (`render()`, `renderView()`, `renderBlock()`, `renderBlockView()`, `#[Template(...)]`) gets a `renders` edge to the template file. A name built at runtime, or one with no file on disk, gets no edge. AST cache schema 9.
+- Not covered: Twig components (`<twig:Name>`, `component()`), and Twig paths configured in `twig.yaml`.
+
 Consolidated PHP-support and resolution work from the [`lawnstarter/graphify`](https://github.com/lawnstarter/graphify) fork — #1682 and everything found while fixing it. The full defect report is #2615. The groups below are ordered as the work landed on the fork, so a later group can lift a refusal an earlier group states; those spots are marked.
 
 **PHP member-call resolution, cross-language isolation, and import-edge repair:**
