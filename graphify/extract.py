@@ -73,6 +73,7 @@ from graphify.extractors.solidity import (  # noqa: F401
 )
 from graphify.extractors.sql import extract_sql  # noqa: F401
 from graphify.extractors.terraform import extract_terraform, prepare_terraform, resolve_terraform_modules  # noqa: F401
+from graphify.extractors.twig import extract_twig  # noqa: F401
 from graphify.extractors.verilog import extract_verilog  # noqa: F401
 from graphify.extractors.vbnet import extract_vbnet, resolve_vbnet_partial_calls  # noqa: F401
 from graphify.extractors.zig import extract_zig  # noqa: F401
@@ -3554,6 +3555,10 @@ _LANG_FAMILY_BY_EXT: dict[str, str] = {
     ".dart": "dart",
     ".sh": "shell", ".bash": "shell",
     ".ps1": "powershell", ".psm1": "powershell", ".psd1": "powershell",
+    # Naming the template family keeps a Twig include stub from being remapped
+    # onto a same-labeled function in an unrelated language, which is what an
+    # unknown (None) family permits.
+    ".twig": "twig",
 }
 
 
@@ -7938,6 +7943,7 @@ _DISPATCH: dict[str, Any] = {
     ".resource": extract_robot,
     ".cls": extract_apex,
     ".trigger": extract_apex,
+    ".twig": extract_twig,
 }
 
 

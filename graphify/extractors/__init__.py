@@ -35,6 +35,7 @@ from graphify.extractors.sln import extract_sln
 from graphify.extractors.solidity import extract_solidity
 from graphify.extractors.sql import extract_sql
 from graphify.extractors.terraform import extract_terraform
+from graphify.extractors.twig import extract_twig
 from graphify.extractors.verilog import extract_verilog
 from graphify.extractors.vbnet import extract_vbnet
 from graphify.extractors.zig import extract_zig
@@ -70,6 +71,7 @@ LANGUAGE_EXTRACTORS: dict[str, Callable[[Path], dict]] = {
     "solidity": extract_solidity,
     "sql": extract_sql,
     "terraform": extract_terraform,
+    "twig": extract_twig,
     "verilog": extract_verilog,
     "vbnet": extract_vbnet,
     "zig": extract_zig,
