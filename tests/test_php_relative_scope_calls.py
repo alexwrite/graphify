@@ -95,7 +95,7 @@ def test_static_scope_mints_no_call_to_unrelated_static_method(tmp_path: Path):
 
 
 def test_absolute_scoped_call_still_resolves(tmp_path: Path):
-    """Positive control: `Helper::format()` still targets the `Helper` class.
+    """Positive control: `Helper::format()` still resolves, to `Helper::format` (#23).
 
     Same corpus shape as the refusal tests, so the refusal is demonstrably
     scoped to the relative names and not to scoped calls in general.
@@ -117,5 +117,5 @@ def test_absolute_scoped_call_still_resolves(tmp_path: Path):
     })
 
     set_up = _find(r, ".setUp()", "app_a_a_setup")
-    helper = _find(r, "Helper", "app_support_helper_helper")
-    assert (set_up, helper) in calls
+    helper_format = _find(r, ".format()", "app_support_helper_helper")
+    assert (set_up, helper_format) in calls

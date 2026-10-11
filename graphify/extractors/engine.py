@@ -924,6 +924,20 @@ _PHP_CLOSURE_TYPES = frozenset({"anonymous_function", "arrow_function"})
 _PHP_CLOSURE_REBINDING_CALLS = frozenset({"bind", "bindto", "call", "macro", "mixin"})
 
 
+def _php_is_first_class_callable(call_node) -> bool:
+    """Whether a PHP call is a first-class callable, `m(...)` (#15).
+
+    PHP 8.1 reuses the call node types for it, so the argument list is the
+    discriminator. Probe-verified on the pinned grammar (tree-sitter-php
+    0.24.1): `m(...)` parses as `arguments: (arguments (variadic_placeholder))`,
+    exactly one named child of that type; `m()`, `m(1)` and the spread
+    `m(...$args)` (one `argument` child) do not.
+    """
+    args_node = call_node.child_by_field_name("arguments")
+    named_args = args_node.named_children if args_node is not None else []
+    return len(named_args) == 1 and named_args[0].type == "variadic_placeholder"
+
+
 def _php_has_static_modifier(node) -> bool:
     return any(c.type == "static_modifier" for c in node.children)
 
@@ -8623,19 +8637,24 @@ def _extract_generic(
                         if callee_name.lower() in _PHP_LANGUAGE_CONSTRUCTS:
                             callee_name = None
                 elif node.type == "scoped_call_expression":
-                    # Static method call: Helper::format() → callee = "Helper"
+                    # Static method call `Helper::format()` (#23): the method is
+                    # the callee and the class the scope NAMES is its receiver,
+                    # typed exactly like `(new Helper())->format()` below.
+                    # `parent::` / `self::` / `static::` (`relative_scope`) need
+                    # inheritance context the raw-call facts do not carry (#39),
+                    # and `$cls::m()` / `Helper::$m()` name nothing: no callee.
                     scope_node = node.child_by_field_name("scope")
-                    if scope_node:
-                        scope_text = _read_text(scope_node, source)
-                        # `parent::m()` / `self::m()` / `static::m()` name no
-                        # callee: which class the scope denotes needs inheritance
-                        # context the raw-call facts do not carry (#39). Naming
-                        # the scope anyway let the cross-file label match bind
-                        # them to any unrelated `->parent()` method in the
-                        # corpus. Refused by the same non-concrete set the
-                        # `(new X())->m()` branch below applies.
-                        if scope_text.lower() not in _PHP_NON_CONCRETE_TYPE_NAMES:
-                            callee_name = scope_text
+                    name_node = node.child_by_field_name("name")
+                    if (scope_node is not None and scope_node.type in ("name", "qualified_name")
+                            and name_node is not None and name_node.type == "name"):
+                        short = _php_name_text(scope_node, source)
+                        if short and short.lower() not in _PHP_NON_CONCRETE_TYPE_NAMES:
+                            is_member_call = True
+                            callee_name = _read_text(name_node, source)
+                            member_receiver = "(static)"
+                            php_inline_new_type = short
+                            php_inline_new_qualified = _read_text(scope_node, source)
+                            php_fcc = _php_is_first_class_callable(node)
                 else:
                     # member_call_expression / nullsafe_member_call_expression:
                     # $obj->method() / $obj?->method()
@@ -8686,21 +8705,7 @@ def _extract_generic(
                                 member_receiver = "(new)"
                                 php_inline_new_type = short
                                 php_inline_new_qualified = _read_text(cls, source)
-                        # First-class callable `$obj->method(...)` (#15). PHP 8.1
-                        # reuses member_call_expression for it, so the shared
-                        # `node.type in config.call_types` gate cannot tell it
-                        # from an invocation — the argument list can. Probe-
-                        # verified on the pinned grammar (tree-sitter-php 0.24.1):
-                        # `m(...)` parses as `arguments: (arguments
-                        # (variadic_placeholder))` — exactly one named child of
-                        # that type. `m()`, `m(1)` and the spread `m(...$args)`
-                        # (one `argument` child) do not, so the discriminator is
-                        # unambiguous.
-                        args_node = node.child_by_field_name("arguments")
-                        if args_node is not None:
-                            named_args = args_node.named_children
-                            php_fcc = (len(named_args) == 1
-                                       and named_args[0].type == "variadic_placeholder")
+                        php_fcc = _php_is_first_class_callable(node)
                     receiver = node.child_by_field_name("object")
                     if (receiver is not None
                             and _read_text(receiver, source) == "$this"
@@ -8952,6 +8957,10 @@ def _extract_generic(
                 if config.ts_module == "tree_sitter_php":
                     if php_inline_new_type:
                         _php_receiver_type = php_inline_new_type
+                        if member_receiver == "(static)":
+                            # The scope as written is the type's only spelling:
+                            # hand it to the `use`-aware resolver (#23).
+                            _php_receiver_qualified = php_inline_new_qualified
                     elif member_receiver and member_receiver != "this":
                         _php_types = receiver_types or {}
                         _php_declared = _php_types.get(member_receiver)
