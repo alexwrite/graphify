@@ -5665,3 +5665,36 @@ def test_kotlin_bracketed_annotations_emits_multiple_attribute_edges(tmp_path):
     refs = _edge_labels(result, "references", "attribute")
     assert ("Foo", "Inject") in refs
     assert ("Foo", "VisibleForTesting") in refs
+
+
+# ── Controller -> template (`renders`) ───────────────────────────────────────
+
+def _views_corpus(fixture: str) -> dict:
+    """Full extract() over every file of a views fixture, rooted at the fixture."""
+    import tempfile
+    root = (FIXTURES / fixture).resolve()
+    paths = sorted(p for p in root.rglob("*") if p.is_file())
+    with tempfile.TemporaryDirectory() as td:
+        return _extract_corpus(paths, cache_root=Path(td), root=root)
+
+
+def _renders(r: dict) -> set[tuple[str, str]]:
+    """(source label, rendered template's source_file) for every `renders` edge."""
+    by_id = {n["id"]: n for n in r["nodes"]}
+    return {
+        (by_id[e["source"]]["label"], by_id[e["target"]]["source_file"])
+        for e in r["edges"]
+        if e["relation"] == "renders"
+    }
+
+
+def test_symfony_render_and_template_attribute_link_to_the_template_file():
+    r = _views_corpus("symfony_views")
+    # Concatenated, interpolated and missing names yield no edge.
+    assert _renders(r) == {
+        (".list()", "templates/product/index.html.twig"),
+        (".show()", "templates/product/index.html.twig"),
+        (".partial()", "templates/product/_row.html.twig"),
+        (".row()", "templates/product/_row.html.twig"),
+    }
+    _assert_no_dangling(r)
