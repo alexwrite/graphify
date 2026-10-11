@@ -25,6 +25,7 @@ Signatures below are the real ones - `tests/test_architecture_doc.py` imports ev
 | `export.py` | `to_json`, `to_html`, `to_obsidian`, `to_svg`, `to_graphml`, `to_canvas`, `to_cypher` | graph → graph.json, graph.html, Obsidian vault, graph.svg, … one function per format |
 | `wiki.py` | `to_wiki(G, communities, output_dir, ...)` | graph → one markdown article per community + `index.md` |
 | `callflow_html.py` | `write_callflow_html(...)` | graphify-out files → Mermaid architecture/call-flow HTML |
+| `zoom_html.py` | `build_zoom_data(graph, project="")`, `write_zoom_html(graph_path, output_path, *, project_label=None)` | graph.json → one offline HTML page with three zoom levels: domains, a domain's classes by layer, a class's methods and call sites |
 | `ingest.py` | `ingest(url, target_dir, ...)` | URL → file saved to corpus dir |
 | `cache.py` | `check_semantic_cache(files, root)`, `save_semantic_cache(nodes, edges, ...)` | files → cached nodes / edges / hyperedges + the list of files still needing extraction |
 | `security.py` | `validate_url`, `safe_fetch`, `validate_graph_path`, `sanitize_label` | URL / path / label → validated value, or raises |

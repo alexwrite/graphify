@@ -346,6 +346,7 @@ graphify parses ~40 programming languages locally with tree-sitter AST, and maps
 /graphify . --no-viz               # skip the HTML, just the report + JSON
 /graphify . --wiki                 # build a markdown wiki from the graph
 graphify export callflow-html      # Mermaid architecture/call-flow HTML (auto-regenerates on every git commit if hook is installed)
+graphify export zoom-html          # offline architecture view: domains, then one domain's classes by layer, then one class
 
 /graphify query "what connects auth to the database?"
 /graphify path "UserService" "DatabasePool"
