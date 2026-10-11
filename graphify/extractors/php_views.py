@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from graphify.extractors.base import _corpus_relative_path, _make_id, _read_text
+from graphify.extractors.blade import resolve_blade_name
 from graphify.extractors.twig import _resolve_path_ref as _resolve_twig_name
 
 # Symfony AbstractController and Twig\Environment render methods (template first).
@@ -16,6 +17,7 @@ _TWIG_RENDER_METHODS = frozenset({"render", "renderView", "renderBlock", "render
 
 _RESOLVERS = {
     "twig": _resolve_twig_name,
+    "blade": resolve_blade_name,
 }
 
 
@@ -48,13 +50,35 @@ def _short_name(node, source: bytes) -> str:
     return _read_text(node, source).rsplit("\\", 1)[-1]
 
 
+def _is_laravel_view_call(node, source: bytes) -> bool:
+    """`view(...)`, `View::make(...)` or `response()->view(...)`."""
+    if node.type == "function_call_expression":
+        fn = node.child_by_field_name("function")
+        return fn is not None and _short_name(fn, source) == "view"
+    if node.type == "scoped_call_expression":
+        scope, method = node.child_by_field_name("scope"), node.child_by_field_name("name")
+        return (scope is not None and method is not None
+                and _short_name(scope, source) == "View" and _read_text(method, source) == "make")
+    if node.type == "member_call_expression":
+        obj, method = node.child_by_field_name("object"), node.child_by_field_name("name")
+        if obj is None or method is None or _read_text(method, source) != "view":
+            return False
+        fn = obj.child_by_field_name("function") if obj.type == "function_call_expression" else None
+        return fn is not None and _short_name(fn, source) == "response"
+    return False
+
+
 def render_call_template(node, source: bytes) -> tuple[str, str] | None:
     """(engine, name) for a call that renders a literal template name, else None."""
+    args = node.child_by_field_name("arguments")
+    if _is_laravel_view_call(node, source):
+        name = _first_argument_literal(args, source, "view")
+        return ("blade", name) if name else None
     if node.type in ("member_call_expression", "nullsafe_member_call_expression"):
         method = node.child_by_field_name("name")
         if method is None or _read_text(method, source) not in _TWIG_RENDER_METHODS:
             return None
-        name = _first_argument_literal(node.child_by_field_name("arguments"), source, "view")
+        name = _first_argument_literal(args, source, "view")
         if name and name.endswith(".twig"):
             return ("twig", name)
     return None
