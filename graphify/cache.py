@@ -37,7 +37,7 @@ except Exception:
     _EXTRACTOR_VERSION = "unknown"
 
 # Bump when AST cache-key semantics change independently of the package version.
-_AST_CACHE_SCHEMA = 10  # Blade views resolved to their file, PHP `renders` edges to Blade views.
+_AST_CACHE_SCHEMA = 11  # PHP call resolution: closures, static methods, bare functions (#22, #23, #14), on top of Blade views (10).
 
 
 # Per-process memo: distributions() scans site-packages metadata, which is
