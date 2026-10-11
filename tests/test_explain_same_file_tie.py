@@ -118,3 +118,20 @@ def test_get_node_resolver_refuses_same_file_twins():
     assert err is not None and err.startswith("Ambiguous: '.nonce()' matches 2 nodes in src/x.ts.")
     nid, err = _resolve_single_node(G, "src_x_alphaclient_nonce")
     assert (nid, err) == ("src_x_alphaclient_nonce", None)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_explain_file_path_without_file_node_is_refused(monkeypatch, tmp_path, capsys, reverse):
+    """With no file node to come first, a path names its members alike: refuse, never pick one."""
+    nodes = [
+        {"id": "vendor_lib_a", "label": "$", "source_file": "vendor/lib.js", "source_location": "L1"},
+        {"id": "vendor_lib_b", "label": "init()", "source_file": "vendor/lib.js", "source_location": "L1"},
+    ]
+    p = tmp_path / "graph.json"
+    p.write_text(json.dumps({
+        "directed": True, "multigraph": False, "graph": {}, "links": [],
+        "nodes": list(reversed(nodes)) if reverse else nodes,
+    }))
+    out, code = _explain(monkeypatch, capsys, p, "vendor/lib.js")
+    assert out.startswith("Ambiguous: 'vendor/lib.js' matches 2 nodes in vendor/lib.js.")
+    assert code == EXIT_AMBIGUOUS
