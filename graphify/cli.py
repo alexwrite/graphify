@@ -1861,7 +1861,7 @@ def dispatch_command(cmd: str) -> None:
 
     elif cmd == "explain":
         if len(sys.argv) < 3:
-            print('Usage: graphify explain "<node>" [--graph path]', file=sys.stderr)
+            print('Usage: graphify explain "<node>" [--all] [--graph path]', file=sys.stderr)
             sys.exit(1)
         from graphify.serve import _is_ambiguity_refusal, _resolve_single_node
         from networkx.readwrite import json_graph
@@ -1869,6 +1869,7 @@ def dispatch_command(cmd: str) -> None:
         label = sys.argv[2]
         graph_path = _default_graph_path()
         args = sys.argv[3:]
+        show_all = "--all" in args
         for i, a in enumerate(args):
             if a == "--graph" and i + 1 < len(args):
                 graph_path = args[i + 1]
@@ -1942,7 +1943,8 @@ def dispatch_command(cmd: str) -> None:
         if connections:
             print(f"\nConnections ({len(connections)}):")
             connections.sort(key=lambda c: G.degree(c[1]), reverse=True)
-            for direction, nb, edata in connections[:20]:
+            shown = connections if show_all else connections[:20]
+            for direction, nb, edata in shown:
                 rel = edata.get("relation", "")
                 conf = edata.get("confidence", "")
                 arrow = "-->" if direction == "out" else "<--"
@@ -1953,9 +1955,9 @@ def dispatch_command(cmd: str) -> None:
                 sfile = edata.get("source_file") or ""
                 at = f" {sfile}:{loc}" if loc else ""
                 print(f"  {arrow} {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]{at}")
-            if len(connections) > 20:
-                remainder = connections[20:]
-                print(f"  ... and {len(remainder)} more")
+            if len(connections) > len(shown):
+                remainder = connections[len(shown):]
+                print(f"  ... and {len(remainder)} more (--all lists all {len(connections)})")
                 # #2009: a bare count silently hides the answer on high-degree
                 # nodes ("who calls this, what's the impact?"). Group the cut
                 # connections by direction + file so their shape is visible
