@@ -37,7 +37,7 @@ except Exception:
     _EXTRACTOR_VERSION = "unknown"
 
 # Bump when AST cache-key semantics change independently of the package version.
-_AST_CACHE_SCHEMA = 7  # Python opaque-base/super(args) raw-call markers and nested-class enclosing ids.
+_AST_CACHE_SCHEMA = 8  # PHP typed-receiver, use-import and declared-FQN facts in persisted raw calls.
 
 
 # Per-process memo: distributions() scans site-packages metadata, which is
