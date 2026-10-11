@@ -90,12 +90,13 @@ def _write_build_config(
     *,
     excludes: "list[str] | None",
     gitignore: bool | None = None,
+    follow_symlinks_into: "list[str] | None" = None,
 ) -> None:
     """Persist corpus-shaping options under ``out_dir``.
 
     Best effort and non clobbering: omitted options retain their existing values.
     """
-    if not excludes and gitignore is None:
+    if not excludes and gitignore is None and not follow_symlinks_into:
         return
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +111,8 @@ def _write_build_config(
             config["excludes"] = list(excludes)
         if gitignore is not None:
             config["gitignore"] = gitignore
+        if follow_symlinks_into:
+            config["follow_symlinks_into"] = list(follow_symlinks_into)
         path.write_text(json.dumps(config), encoding="utf-8")
     except OSError:
         pass
@@ -127,6 +130,20 @@ def _read_build_excludes(out_dir: Path) -> list[str]:
     except (OSError, json.JSONDecodeError):
         pass
     return []
+
+
+def _read_build_follow_symlinks_into(out_dir: Path) -> list[str] | None:
+    """Return the persisted ``--follow-symlinks-into`` roots, or None when unset."""
+    try:
+        path = out_dir / _BUILD_CONFIG_FILENAME
+        if path.is_file():
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            roots = cfg.get("follow_symlinks_into") if isinstance(cfg, dict) else None
+            if isinstance(roots, list):
+                return [str(x) for x in roots if isinstance(x, str) and x] or None
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
 
 
 def _read_build_gitignore(out_dir: Path) -> bool:
@@ -1726,6 +1743,7 @@ def _rebuild_code(
             watch_path, follow_symlinks=follow_symlinks,
             extra_excludes=_persisted_excludes or None,
             gitignore=_gitignore_enabled,
+            follow_symlinks_into=_read_build_follow_symlinks_into(out),
         )
         code_files = [Path(f) for f in detected['files']['code']]
 

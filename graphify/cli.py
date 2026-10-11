@@ -3421,7 +3421,7 @@ def dispatch_command(cmd: str) -> None:
             print(
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR|--output DIR] [--google-workspace] [--no-cluster] "
-                "[--no-gitignore] [--code-only] [--no-dedup] "
+                "[--no-gitignore] [--follow-symlinks-into DIR] [--code-only] [--no-dedup] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
                 "[--api-timeout S] [--postgres DSN] [--cargo] [--allow-partial] "
                 "[--allow-dedup-shrink] [--timing]",
@@ -3472,6 +3472,7 @@ def dispatch_command(cmd: str) -> None:
         cli_resolution: float = 1.0
         cli_exclude_hubs: float | None = None
         cli_excludes: list[str] = []
+        cli_follow_symlinks_into: list[str] = []
         cli_timing: bool = False
         # --force parity with `graphify update`: the flag or GRAPHIFY_FORCE=1
         # disables the incremental gate and skips semantic-cache reads (#1894).
@@ -3566,6 +3567,10 @@ def dispatch_command(cmd: str) -> None:
                 cli_excludes.append(args[i + 1]); i += 2
             elif a.startswith("--exclude="):
                 cli_excludes.append(a.split("=", 1)[1]); i += 1
+            elif a == "--follow-symlinks-into" and i + 1 < len(args):
+                cli_follow_symlinks_into.append(args[i + 1]); i += 2
+            elif a.startswith("--follow-symlinks-into="):
+                cli_follow_symlinks_into.append(a.split("=", 1)[1]); i += 1
             elif a == "--postgres" and i + 1 < len(args):
                 cli_postgres_dsn = args[i + 1]; i += 2
             elif a.startswith("--postgres="):
@@ -3587,6 +3592,16 @@ def dispatch_command(cmd: str) -> None:
         if not has_path and cli_postgres_dsn is None:
             print("error: must specify a path to scan or a --postgres DSN", file=sys.stderr)
             sys.exit(1)
+
+        from graphify.detect import trusted_symlink_roots as _trusted_symlink_roots
+        _cli_into = _trusted_symlink_roots(cli_follow_symlinks_into)
+        if len(_cli_into) < len({str(Path(e).resolve()) for e in cli_follow_symlinks_into}):
+            print(
+                "error: every --follow-symlinks-into value must be an existing "
+                "directory other than a filesystem root",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
         if no_dedup and dedup_llm:
             # --dedup-llm is pass 3 of the dedup pipeline, so with dedup off it
@@ -3629,6 +3644,7 @@ def dispatch_command(cmd: str) -> None:
             _write_build_config as _write_build_cfg,
             _read_build_excludes as _read_build_ex,
             _read_build_gitignore as _read_build_gi,
+            _read_build_follow_symlinks_into as _read_build_into,
         )
         # #1971 persistence: an explicit --no-gitignore persists False; a later
         # flag-less `graphify extract` must NOT clobber it back to True, which
@@ -3640,10 +3656,18 @@ def dispatch_command(cmd: str) -> None:
         _effective_gitignore = False if no_gitignore else _read_build_gi(graphify_out)
         # An explicit list replaces the persisted one; omission reuses it.
         _effective_excludes = cli_excludes or _read_build_ex(graphify_out)
+        # Flag, then persisted value, then env; a flag or env value is persisted for hook rebuilds.
+        _persisted_into = _read_build_into(graphify_out)
+        _effective_into = (
+            [str(p) for p in _cli_into]
+            or _persisted_into
+            or [str(p) for p in _trusted_symlink_roots(None)]
+        )
         _write_build_cfg(
             graphify_out,
             excludes=cli_excludes or None,
             gitignore=False if no_gitignore else None,
+            follow_symlinks_into=_effective_into if _effective_into != _persisted_into else None,
         )
 
         stages = _StageTimer(cli_timing)
@@ -3711,6 +3735,7 @@ def dispatch_command(cmd: str) -> None:
                 extra_excludes=_effective_excludes or None,
                 gitignore=_effective_gitignore,
                 cache_root=out_root,
+                follow_symlinks_into=_effective_into,
             )
             files_by_type = detection.get("files", {})
             new_by_type = detection.get("new_files", {})
@@ -3785,6 +3810,7 @@ def dispatch_command(cmd: str) -> None:
                 extra_excludes=_effective_excludes or None,
                 cache_root=out_root,
                 gitignore=_effective_gitignore,
+                follow_symlinks_into=_effective_into,
             )
             files_by_type = detection.get("files", {})
             code_files = [Path(p) for p in files_by_type.get("code", [])]
